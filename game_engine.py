@@ -1,470 +1,861 @@
-"""
-game_engine.py — Werewolf Bot v3.0
-===================================
-Pure game logic with zero discord imports.
-Manages:
-  • Lobby → Night → Day → Voting → GameOver state machine
-  • Player registry & role distribution (random.shuffle)
-  • Night action resolution (wolf, doctor, seductress, etc.)
-  • Day voting tally (mayor weight, king flip, tie-break)
-  • Win-condition checking
-
-The engine is stateless across games — each GameSession
-creates a fresh GameEngine instance.
-"""
-
+import discord
+import asyncio
 import random
-from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
-
-from config import SPECIAL_ROLES
+from config import *
 
 
-# ═══════════════════════════════════════════════════════════════
-# ENUMS & DATA CLASSES
-# ═══════════════════════════════════════════════════════════════
+class GameData:
+    def __init__(self, guild_id, channel, creator):
+        self.guild_id = guild_id
+        self.channel = channel
+        self.creator = creator
+        self.players = {}
+        self.roles = {}
+        self.alive = set()
+        self.phase = 'lobby'
+        self.night_count = 0
+        self.day_count = 0
+        self.lobby_message = None
+        self.starting = False
 
-class GameState(Enum):
-    """Finite-state-machine stages for a single game session."""
-    LOBBY     = "lobby"
-    NIGHT     = "night"
-    DAY       = "day"
-    VOTING    = "voting"
-    GAME_OVER = "game_over"
+        self.night_votes = {}
+        self.attacked_player = None
+        self.detective_used = False
+        self.detective_target = None
+        self.bodyguard_used = False
+        self.bodyguard_target = None
+        self.king_used = False
+        self.king_target = None
+        self.doctor_last_target = None
+        self.doctor_target = None
+        self.seducer_target = None
+        self.night_actors = set()
 
+        self.day_votes = {}
 
-class PlayerData:
-    """
-    Runtime data for one player in the current game.
-    Every field is reset when a new GameEngine is created.
-    """
-    __slots__ = (
-        "id", "name", "role", "alive",
-        "detective_used", "guardian_used", "king_used",
-        "doctor_target", "seductress_target",
-        "vote_target", "wolf_vote",
-        "detective_target", "guardian_target", "king_flip_target",
-    )
-
-    def __init__(self, member_id: int, name: str):
-        self.id   = member_id
-        self.name = name
-
-        # Assigned during role distribution
-        self.role: Optional[str] = None
-        self.alive = True
-
-        # Per-role ability flags
-        self.detective_used = False   # 🔍 once per game
-        self.guardian_used  = False   # 🛡️ once per game
-        self.king_used      = False   # 👑 once per game
-
-        # Per-round night targets (reset each night)
-        self.doctor_target:      Optional[int] = None  # ⚕️
-        self.seductress_target:  Optional[int] = None  # 💃
-
-        # Day-vote target (reset each day)
-        self.vote_target: Optional[int] = None
-
-        # Night-action temporary storage (cleared after resolution)
-        self.wolf_vote:         Optional[int] = None
-        self.detective_target:  Optional[int] = None
-        self.guardian_target:   Optional[int] = None
-        self.king_flip_target:  Optional[int] = None
+        self.all_werewolves_voted = asyncio.Event()
+        self.night_actions_done = asyncio.Event()
+        self.vote_event = asyncio.Event()
+        self.king_event = asyncio.Event()
 
 
-class NightResult:
-    """Returned by resolve_night(). Contains all events that happened."""
+class GameManager:
     def __init__(self):
-        self.killed:             List[int] = []            # IDs of dead players
-        self.detective_result:   Optional[Tuple[int, int, bool]] = None  # (det_id, tgt_id, is_wolf)
-        self.exposed_wolf:       Optional[int] = None      # Um Fadi's exposed wolf
-        self.message:            str = ""                  # Human-readable events
-
-
-class VoteResult:
-    """Returned by resolve_voting(). Contains tally and elimination."""
-    def __init__(self):
-        self.eliminated:   Optional[int] = None
-        self.vote_counts:  Dict[int, int] = {}
-        self.message:      str = ""
-        self.tie:          bool = False
-
-
-# ═══════════════════════════════════════════════════════════════
-# GAME ENGINE  (pure logic, no I/O)
-# ═══════════════════════════════════════════════════════════════
-
-class GameEngine:
-    """
-    Stateless-pure game engine.  One instance per game session.
-    All player state lives in self.players (dict of PlayerData).
-    Night / vote resolution is deterministic given fixed inputs.
-    """
-
-    def __init__(self):
-        self.state: GameState = GameState.LOBBY
-        self.players: Dict[int, PlayerData] = {}
-        self.order: List[int] = []           # join-order (also iteration order)
-        self.day_number: int = 0
-        self.wolf_votes: Dict[int, int] = {}          # wolf_id → target_id
-        self.night_actions_done: Set[int] = set()     # players who already acted
-
-    # ─── Player Management ────────────────────────────────────────────────
-
-    @property
-    def living_ids(self) -> List[int]:
-        """IDs of all players who are still alive, in join order."""
-        return [pid for pid in self.order if self.players[pid].alive]
-
-    @property
-    def dead_ids(self) -> List[int]:
-        """IDs of players who died during the game, in join order."""
-        return [pid for pid in self.order if not self.players[pid].alive]
-
-    @property
-    def living_wolves(self) -> List[int]:
-        """IDs of alive players whose role is 'wolf'."""
-        return [pid for pid in self.living_ids if self.players[pid].role == "wolf"]
-
-    def add_player(self, member_id: int, name: str) -> bool:
-        """Register a new player.  Returns False if already present or lobby full."""
-        if member_id in self.players:
-            return False
-        self.players[member_id] = PlayerData(member_id, name)
-        self.order.append(member_id)
-        return True
-
-    def remove_player(self, member_id: int) -> bool:
-        """Unregister a player (lobby only).  Returns False if not found."""
-        if member_id not in self.players:
-            return False
-        del self.players[member_id]
-        if member_id in self.order:
-            self.order.remove(member_id)
-        return True
-
-    def player_count(self) -> int:
-        return len(self.players)
-
-    def get_player(self, member_id: int) -> Optional[PlayerData]:
-        return self.players.get(member_id)
-
-    # ─── Role Distribution Algorithm ──────────────────────────────────────
-    #
-    # How it works:
-    #   1. Shuffle all player IDs with random.shuffle (unbiased).
-    #   2. Pick N wolves based on total player count.
-    #   3. Select as many unique special roles as remaining slots allow.
-    #   4. Fill leftovers with villagers.
-    #   5. Shuffle the role list one more time so role order
-    #      does NOT mirror shuffled-player order.
-    #   6. Zip IDs → roles and assign.
-    #
-    # This guarantees every player gets exactly one role,
-    # every game has the intended wolf:village ratio, and
-    # no role is accidentally skipped or duplicated.
-    # ──────────────────────────────────────────────────────────────────────
-
-    def assign_roles(self) -> bool:
-        """Distribute roles across all registered players. Returns True on success."""
-        n = self.player_count()
-        if n < 6:
-            return False
-
-        # Step 1 — randomise player order
-        ids = list(self.players.keys())
-        random.shuffle(ids)
-
-        # Step 2 — wolf count scales with lobby size
-        if n <= 7:
-            num_wolves = 1
-        elif n <= 10:
-            num_wolves = 2
-        else:
-            num_wolves = 3
-
-        # Step 3 — special roles (up to available slots)
-        num_special = min(len(SPECIAL_ROLES), n - num_wolves)
-
-        # Step 4 — build role list
-        roles: List[str] = ["wolf"] * num_wolves
-        selected = random.sample(SPECIAL_ROLES, num_special)
-        roles.extend(selected)
-
-        # Step 5 — fill with villagers
-        remaining = n - len(roles)
-        roles.extend(["villager"] * remaining)
-
-        # Step 6 — shuffle so role order decouples from player order
-        random.shuffle(roles)
-
-        # Step 7 — assign
-        for pid, role_name in zip(ids, roles):
-            self.players[pid].role = role_name
-
-        self.order = ids
-        return True
-
-    # ─── Night Actions ────────────────────────────────────────────────────
-
-    def get_night_action_players(self) -> List[int]:
-        """IDs of living players who MUST submit a night action this round."""
-        result = []
-        for pid in self.living_ids:
-            p = self.players[pid]
-            if p.role == "wolf":
-                result.append(pid)
-            elif p.role == "doctor":
-                result.append(pid)
-            elif p.role == "seductress":
-                result.append(pid)
-            elif p.role == "detective" and not p.detective_used:
-                result.append(pid)
-            elif p.role == "guardian" and not p.guardian_used:
-                result.append(pid)
-        return result
-
-    def all_night_actions_done(self) -> bool:
-        """True when every required player has submitted their action."""
-        required = set(self.get_night_action_players())
-        return required.issubset(self.night_actions_done)
-
-    def complete_night_action(self, member_id: int):
-        self.night_actions_done.add(member_id)
-
-    # Target setters — each records the action and marks it done
-
-    def set_wolf_vote(self, wolf_id: int, target_id: int):
-        self.players[wolf_id].wolf_vote = target_id
-        self.wolf_votes[wolf_id] = target_id
-        self.complete_night_action(wolf_id)
-
-    def set_doctor_target(self, doctor_id: int, target_id: int):
-        self.players[doctor_id].doctor_target = target_id
-        self.complete_night_action(doctor_id)
-
-    def set_seductress_target(self, sid: int, target_id: int):
-        self.players[sid].seductress_target = target_id
-        self.complete_night_action(sid)
-
-    def set_detective_target(self, did: int, target_id: int):
-        self.players[did].detective_target = target_id
-        self.complete_night_action(did)
-
-    def set_guardian_target(self, gid: int, target_id: int):
-        self.players[gid].guardian_target = target_id
-        self.complete_night_action(gid)
-
-    # ─── Night Resolution ─────────────────────────────────────────────────
-    #
-    # Priority order (hard-coded, do not reorder):
-    #   1. 🐺 Wolves vote → kill_target
-    #   2. 💃 Seductress — if she chose a wolf, both die.
-    #      If wolves targeted her target, she dies instead.
-    #   3. ⚕️ Doctor — if he healed the kill_target, cancel kill.
-    #   4. 🛡️ Guardian — if he shielded the kill_target, cancel kill.
-    #   5. Apply wolf kill.
-    #   6. 👵 Um Fadi — if killed, expose a random wolf.
-    #   7. Execute all kills (mark .alive = False).
-    #   8. 🔍 Detective — reveal target's faction to detective.
-    # ──────────────────────────────────────────────────────────────────────
-
-    def resolve_night(self) -> NightResult:
-        """Resolve all night actions. Returns a NightResult with events."""
-        result = NightResult()
-
-        # ── 1. Wolf kill target (majority vote, tie → random) ──────
-        kill_target: Optional[int] = None
-        if self.wolf_votes:
-            counts: Dict[int, int] = {}
-            for wid, tid in self.wolf_votes.items():
-                if wid in self.living_ids:
-                    counts[tid] = counts.get(tid, 0) + 1
-            if counts:
-                mv = max(counts.values())
-                top = [t for t, c in counts.items() if c == mv]
-                kill_target = random.choice(top)
-
-        # ── 2. Gather role references ──────────────────────────────
-        sed_id = next((p for p in self.living_ids if self.players[p].role == "seductress"), None)
-        doc_id = next((p for p in self.living_ids if self.players[p].role == "doctor"), None)
-        gua_id = next(
-            (p for p in self.living_ids
-             if self.players[p].role == "guardian" and not self.players[p].guardian_used),
-            None,
-        )
-
-        sed_tgt = self.players[sed_id].seductress_target if sed_id else None
-        doc_tgt = self.players[doc_id].doctor_target if doc_id else None
-        gua_tgt = self.players[gua_id].guardian_target if gua_id else None
-
-        # ── 3. Seductress ──────────────────────────────────────────
-        if sed_id and sed_tgt and sed_tgt in self.living_ids:
-            if self.players[sed_tgt].role == "wolf":
-                result.killed.extend([sed_id, sed_tgt])
-                result.message += (
-                    f"💃 {self.players[sed_id].name} اختارت ذئباً وماتت معه!\n"
-                )
-                if kill_target == sed_tgt:
-                    kill_target = None
-            elif kill_target == sed_tgt:
-                result.killed.append(sed_id)
-                result.message += (
-                    f"💃 {self.players[sed_id].name} ضحت بنفسها لتحمي "
-                    f"{self.players[sed_tgt].name}!\n"
-                )
-                kill_target = None
-
-        # ── 4. Doctor ──────────────────────────────────────────────
-        if kill_target and doc_tgt == kill_target:
-            result.message += f"⚕️ الطبيب أنقذ {self.players[kill_target].name}!\n"
-            kill_target = None
-
-        # ── 5. Guardian ────────────────────────────────────────────
-        if kill_target and gua_tgt == kill_target:
-            result.message += f"🛡️ الحارس حمى {self.players[kill_target].name}!\n"
-            if gua_id:
-                self.players[gua_id].guardian_used = True
-            kill_target = None
-
-        # ── 6. Apply wolf kill ─────────────────────────────────────
-        if kill_target and kill_target not in result.killed:
-            result.killed.append(kill_target)
-
-        # ── 7. Um Fadi — expose wolf before death ──────────────────
-        um_id = next(
-            (p for p in self.order
-             if self.players[p].role == "um_fadi" and self.players[p].alive),
-            None,
-        )
-        if um_id and um_id in result.killed:
-            living_wolves = [w for w in self.living_wolves if w != um_id]
-            if living_wolves:
-                exposed = random.choice(living_wolves)
-                result.exposed_wolf = exposed
-                result.message += (
-                    f"👵 أم فادي فضحت {self.players[exposed].name} 🐺!\n"
-                )
-
-        # ── 8. Execute kills ───────────────────────────────────────
-        for tid in result.killed:
-            if tid in self.players:
-                self.players[tid].alive = False
-
-        # ── 9. Detective investigation ─────────────────────────────
-        det_id = next(
-            (p for p in self.living_ids
-             if self.players[p].role == "detective"
-             and not self.players[p].detective_used
-             and self.players[p].detective_target),
-            None,
-        )
-        if det_id:
-            tgt = self.players[det_id].detective_target
-            self.players[det_id].detective_used = True
-            result.detective_result = (
-                det_id, tgt, self.players[tgt].role == "wolf"
-            )
-
-        # ── Cleanup per-round state ────────────────────────────────
-        self.wolf_votes.clear()
-        self.night_actions_done.clear()
-        for pid in self.living_ids:
-            p = self.players[pid]
-            if p.role != "doctor":
-                p.doctor_target = None
-            if p.role != "seductress":
-                p.seductress_target = None
-
-        return result
-
-    # ─── Day Voting ───────────────────────────────────────────────────────
-
-    def set_vote(self, voter_id: int, target_id: int):
-        self.players[voter_id].vote_target = target_id
-
-    def set_king_flip(self, king_id: int, target_id: int):
-        """King uses his one-time power to redirect all votes to one player."""
-        self.players[king_id].king_flip_target = target_id
-        self.players[king_id].king_used = True
-
-    def resolve_voting(self) -> VoteResult:
-        """
-        Count votes, apply mayor bonus (×2), apply king flip,
-        eliminate the player with the most votes (random if tied).
-        """
-        result = VoteResult()
-        counts: Dict[int, int] = {}
-
-        for pid in self.living_ids:
-            p = self.players[pid]
-            if p.vote_target and p.vote_target in self.living_ids:
-                weight = 2 if p.role == "mayor" else 1
-                counts[p.vote_target] = counts.get(p.vote_target, 0) + weight
-
-        # King flip — redirect ALL votes to one target
-        king = next(
-            (p for p in [self.players[pid] for pid in self.living_ids]
-             if p.role == "king" and p.king_used and p.king_flip_target
-             and p.king_flip_target in self.living_ids),
-            None,
-        )
-        if king:
-            total = sum(counts.values()) if counts else len(
-                [p for p in self.living_ids if self.players[p].vote_target]
-            )
-            counts = {king.king_flip_target: max(total, 1)}
-            result.message += f"👑 {king.name} استخدم سلطته وقلب الأصوات!\n"
-
-        result.vote_counts = counts
-
-        if not counts:
-            result.message = "لم يصوت أحد اليوم!"
-            return result
-
-        mv = max(counts.values())
-        top = [t for t, c in counts.items() if c == mv]
-
-        if len(top) > 1:
-            result.tie = True
-            result.eliminated = random.choice(top)
-            result.message += (
-                f"⚖️ تعادل! {self.players[result.eliminated].name} أُخرج عشوائياً."
-            )
-        else:
-            result.eliminated = top[0]
-            result.message += f"🚨 {self.players[result.eliminated].name} خرج بأعلى الأصوات!"
-
-        if result.eliminated:
-            self.players[result.eliminated].alive = False
-
-        for p in self.players.values():
-            p.vote_target = None
-
-        return result
-
-    # ─── Win Condition ────────────────────────────────────────────────────
-
-    def check_win(self) -> Optional[str]:
-        """
-        Check if either team has won.
-        Returns 'wolf', 'village', or None (game continues).
-
-        • Wolves win when living_wolves ≥ (total_living - living_wolves)
-        • Village wins when living_wolves == 0
-        """
-        alive = self.living_ids
-        wolves = sum(1 for p in alive if self.players[p].role == "wolf")
-        villagers = len(alive) - wolves
-
-        if wolves == 0:
-            return "village"
-        if wolves >= villagers:
-            return "wolf"
+        self.games = {}
+
+    def get_game(self, guild_id):
+        return self.games.get(guild_id)
+
+    def create_game(self, guild_id, channel, creator):
+        game = GameData(guild_id, channel, creator)
+        self.games[guild_id] = game
+        return game
+
+    def end_game(self, guild_id):
+        if guild_id in self.games:
+            self.games[guild_id].phase = 'ended'
+            del self.games[guild_id]
+
+    def _get_role_counts(self, game):
+        wc = vc = 0
+        for pid in game.alive:
+            if game.roles[pid] == 'werewolf':
+                wc += 1
+            else:
+                vc += 1
+        return wc, vc
+
+    def _check_win(self, game):
+        wc, vc = self._get_role_counts(game)
+        if wc == 0:
+            return 'village'
+        if wc >= vc:
+            return 'werewolf'
         return None
 
-    def reset_night_state(self):
-        """Call at the end of each day before the next night."""
-        self.wolf_votes.clear()
-        self.night_actions_done.clear()
+    def _distribute_roles(self, game):
+        pids = list(game.players.keys())
+        random.shuffle(pids)
+        num = len(pids)
+        nw = 2 if num <= 7 else 3
+        pool_map = {
+            6:  ['mayor', 'detective', 'doctor', 'bodyguard'],
+            7:  ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress'],
+            8:  ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress'],
+            9:  ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress', 'om_zaki'],
+            10: ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress', 'om_zaki', 'king'],
+            11: ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress', 'om_zaki', 'king'],
+            12: ['mayor', 'detective', 'doctor', 'bodyguard', 'seductress', 'om_zaki', 'king'],
+        }
+        selected = pool_map[num]
+        roles = ['werewolf'] * nw + selected + ['villager'] * (num - nw - len(selected))
+        random.shuffle(roles)
+        game.roles = {}
+        game.alive = set()
+        for i, pid in enumerate(pids):
+            game.roles[pid] = roles[i]
+            game.alive.add(pid)
+
+    def _check_werewolf_done(self, game):
+        alive_ww = [pid for pid in game.alive if game.roles[pid] == 'werewolf']
+        if all(w in game.night_votes for w in alive_ww):
+            game.all_werewolves_voted.set()
+
+    def _check_night_done(self, game):
+        det_expected = any(game.roles[p] == 'detective' and not game.detective_used for p in game.alive)
+        doc_expected = any(game.roles[p] == 'doctor' for p in game.alive)
+        bg_expected  = any(game.roles[p] == 'bodyguard' and not game.bodyguard_used for p in game.alive)
+        sed_expected = any(game.roles[p] == 'seductress' for p in game.alive)
+
+        det_done = not det_expected or game.detective_used
+        doc_done = not doc_expected or game.doctor_target is not None
+        bg_done  = not bg_expected  or game.bodyguard_used
+        sed_done = not sed_expected or game.seducer_target is not None
+
+        if det_done and doc_done and bg_done and sed_done:
+            game.night_actions_done.set()
+
+    def _active_roles_alive(self, game):
+        result = []
+        for pid in game.alive:
+            r = game.roles[pid]
+            if r in NIGHT_ROLES_ACTION:
+                if r == 'detective' and game.detective_used:
+                    continue
+                if r == 'bodyguard' and game.bodyguard_used:
+                    continue
+                result.append(pid)
+        return result
+
+    async def start_game(self, guild_id):
+        game = self.games.get(guild_id)
+        if not game or game.phase == 'ended':
+            return
+        game.phase = 'starting'
+        self._distribute_roles(game)
+        if game.lobby_message and game.lobby_message.view:
+            for child in game.lobby_message.view.children:
+                child.disabled = True
+            await game.lobby_message.edit(view=game.lobby_message.view)
+        embed = discord.Embed(
+            title="🎭 تم توزيع الأدوار!",
+            description="اضغط على الزر أدناه لرؤية دورك 👇",
+            color=COLOR_PRIMARY
+        )
+        embed.set_footer(text=FOOTER)
+        view = RoleRevealView(game)
+        await game.channel.send(embed=embed, view=view)
+        await asyncio.sleep(15)
+        await self._run_night_phase(game)
+
+    def _reset_phase(self, game):
+        game.night_votes = {}
+        game.attacked_player = None
+        game.detective_target = None
+        game.bodyguard_target = None
+        game.doctor_target = None
+        game.seducer_target = None
+        game.king_target = None
+        game.day_votes = {}
+        game.night_actors = set()
+        game.all_werewolves_voted = asyncio.Event()
+        game.night_actions_done = asyncio.Event()
+        game.vote_event = asyncio.Event()
+        game.king_event = asyncio.Event()
+
+    async def _run_night_phase(self, game):
+        game.phase = 'night'
+        game.night_count += 1
+        ch = game.channel
+        alive_ww = [pid for pid in game.alive if game.roles[pid] == 'werewolf']
+
+        emb = discord.Embed(
+            title=f"🌙 الليلة {game.night_count}",
+            description="حل الظلام على القرية.. الذئاب تخرج من جحورها 👀\nأصحاب القدرات الخاصة، تحضروا!",
+            color=COLOR_NIGHT
+        )
+        emb.set_image(url=GAME_GRAPHICS["night_phase"])
+        emb.set_footer(text=FOOTER)
+        await ch.send(embed=emb)
+        await asyncio.sleep(3)
+
+        if alive_ww:
+            emb_w = discord.Embed(
+                title="🐺 الذئاب تتشاور",
+                description="الذئاب تبحث عن فريسة الليلة. اضغط الزر للتصويت على الضحية!",
+                color=COLOR_NIGHT
+            )
+            emb_w.set_footer(text=FOOTER)
+            wv = WerewolfVoteView(game)
+            msg_w = await ch.send(embed=emb_w, view=wv)
+            try:
+                await asyncio.wait_for(game.all_werewolves_voted.wait(), timeout=WEREWOLF_VOTE_TIME)
+            except asyncio.TimeoutError:
+                pass
+            if game.night_votes:
+                vc = {}
+                for t in game.night_votes.values():
+                    vc[t] = vc.get(t, 0) + 1
+                mv = max(vc.values())
+                top = [t for t, c in vc.items() if c == mv]
+                game.attacked_player = random.choice(top)
+            wv.disable_all()
+            await msg_w.edit(view=wv)
+
+        if self._active_roles_alive(game):
+            emb_n = discord.Embed(
+                title="🌙 أصحاب القدرات",
+                description="الليل وقت الفعل! أصحاب القدرات يتحركون في الظلام 👤",
+                color=COLOR_NIGHT
+            )
+            emb_n.set_footer(text=FOOTER)
+            nv = NightActionView(game)
+            msg_n = await ch.send(embed=emb_n, view=nv)
+            try:
+                await asyncio.wait_for(game.night_actions_done.wait(), timeout=NIGHT_ACTIONS_TIME)
+            except asyncio.TimeoutError:
+                pass
+            nv.disable_all()
+            await msg_n.edit(view=nv)
+
+        await self._resolve_night(game)
+
+    async def _resolve_night(self, game):
+        ch = game.channel
+        deaths = []
+        attacked = game.attacked_player
+        saved = False
+
+        if attacked and attacked in game.alive:
+            if game.seducer_target == attacked:
+                if game.roles[attacked] != 'werewolf':
+                    saved = True
+                    from_id = next((p for p, r in game.roles.items() if r == 'seductress' and p in game.alive), None)
+                    if from_id:
+                        sm = random.choice(SEDUCER_SAVE_MESSAGES)
+                        sm = sm.replace("{seducer}", game.players[from_id].display_name).replace("{target}", game.players[attacked].display_name)
+                        await ch.send(embed=discord.Embed(description=sm, color=COLOR_SUCCESS).set_footer(text=FOOTER))
+
+            if not saved and game.bodyguard_used and game.bodyguard_target == attacked:
+                saved = True
+                bm = random.choice(BODYGUARD_SAVE_MSGS).replace("{player}", game.players[attacked].display_name)
+                await ch.send(embed=discord.Embed(description=bm, color=COLOR_SUCCESS).set_footer(text=FOOTER))
+
+            if not saved and game.doctor_target == attacked:
+                saved = True
+                dm = random.choice(DOCTOR_HEAL_MSGS).replace("{player}", game.players[attacked].display_name)
+                await ch.send(embed=discord.Embed(description=dm, color=COLOR_SUCCESS).set_footer(text=FOOTER))
+
+            if not saved:
+                deaths.append(attacked)
+
+        seducer_pid = next((p for p, r in game.roles.items() if r == 'seductress' and p in game.alive), None)
+        if seducer_pid and game.seducer_target:
+            if game.roles.get(game.seducer_target) == 'werewolf' and game.seducer_target in game.alive:
+                if seducer_pid not in deaths:
+                    deaths.append(seducer_pid)
+                if game.seducer_target not in deaths:
+                    deaths.append(game.seducer_target)
+                sm = random.choice(SEDUCER_DEATH_MESSAGES)
+                sm = sm.replace("{seducer}", game.players[seducer_pid].display_name).replace("{target}", game.players[game.seducer_target].display_name)
+                await ch.send(embed=discord.Embed(description=sm, color=COLOR_DANGER).set_footer(text=FOOTER))
+
+        deaths = list(set(deaths))
+        om_zaki_exposed = False
+        for pid in deaths:
+            if pid in game.alive:
+                game.alive.discard(pid)
+                member = game.players[pid]
+                dm = random.choice(DEATH_MESSAGES).replace("{player}", member.display_name)
+                emb = discord.Embed(title="💀 انذبح واحد!", description=dm, color=COLOR_DANGER)
+                emb.set_footer(text=FOOTER)
+                await ch.send(embed=emb)
+                await asyncio.sleep(1)
+
+            if game.roles.get(pid) == 'om_zaki' and pid == attacked and not saved:
+                om_zaki_exposed = True
+
+        if om_zaki_exposed:
+            alive_wolves = [p for p in game.alive if game.roles.get(p) == 'werewolf']
+            if alive_wolves:
+                exposed = random.choice(alive_wolves)
+                em = random.choice(OM_ZAKI_EXPOSE_MESSAGES).replace("{werewolf}", game.players[exposed].display_name)
+                await ch.send(embed=discord.Embed(description=em, color=COLOR_DANGER).set_footer(text=FOOTER))
+
+        if not deaths and not om_zaki_exposed:
+            emb = discord.Embed(
+                title="☀️ الصباح الجميل",
+                description="لا أحد مات الليلة! الكل بخير ☀️😊",
+                color=COLOR_DAY
+            )
+            emb.set_footer(text=FOOTER)
+            await ch.send(embed=emb)
+
+        await asyncio.sleep(2)
+        winner = self._check_win(game)
+        if winner:
+            await self._end_game_with_winner(game, winner)
+            return
+        self._reset_phase(game)
+        await self._run_day_phase(game)
+
+    async def _run_day_phase(self, game):
+        game.phase = 'day'
+        game.day_count += 1
+        ch = game.channel
+        alive_list = "\n".join([f"👤 {game.players[pid].display_name}" for pid in game.alive])
+        emb = discord.Embed(
+            title=f"☀️ النهار {game.day_count}",
+            description=(
+                f"طلعت الشمس! القرية صحت من النوم 🐓\n\n"
+                f"**اللاعبون الأحياء ({len(game.alive)}):**\n{alive_list}\n\n"
+                f"🗳️ التصويت مفتوح! صوت على الشخص اللي تشك فيه..."
+            ),
+            color=COLOR_DAY
+        )
+        emb.set_image(url=GAME_GRAPHICS["day_phase"])
+        emb.set_footer(text=FOOTER)
+        await ch.send(embed=emb)
+        await asyncio.sleep(3)
+
+        king_pid = next((p for p, r in game.roles.items() if r == 'king' and p in game.alive), None)
+        if king_pid and not game.king_used:
+            emb_k = discord.Embed(
+                title="👑 الملك يتربع على عرشه",
+                description="الملك يقدر يستخدم سلطته ويطرد أي لاعب بدون تصويت! (مرة وحدة بالقيم)",
+                color=COLOR_DAY
+            )
+            emb_k.set_footer(text=FOOTER)
+            kv = KingActionView(game, king_pid)
+            msg_k = await ch.send(embed=emb_k, view=kv)
+            try:
+                await asyncio.wait_for(game.king_event.wait(), timeout=KING_ACTION_TIME)
+            except asyncio.TimeoutError:
+                pass
+            kv.disable_all()
+            await msg_k.edit(view=kv)
+
+            if game.king_used and game.king_target:
+                eliminated = game.king_target
+                game.alive.discard(eliminated)
+                member = game.players[eliminated]
+                km = random.choice(KING_DECREE_MSGS).replace("{player}", member.display_name)
+                emb_kd = discord.Embed(title="👑 أمر ملكي!", description=km, color=COLOR_DANGER)
+                emb_kd.set_footer(text=FOOTER)
+                await ch.send(embed=emb_kd)
+                role_key = game.roles.get(eliminated, 'unknown')
+                ri = ROLES_CONFIG.get(role_key, {})
+                await ch.send(f"🎭 **{member.display_name}** كانوا **{ri.get('emoji', '')} {ri.get('name', 'مجهول')}**")
+                await asyncio.sleep(2)
+                winner = self._check_win(game)
+                if winner:
+                    await self._end_game_with_winner(game, winner)
+                    return
+                self._reset_phase(game)
+                await self._run_night_phase(game)
+                return
+
+        emb_v = discord.Embed(
+            title="🗳️ التصويت",
+            description="كل واحد عنده صوت واحد. اختر الشخص اللي تبي تطرده!",
+            color=COLOR_DAY
+        )
+        emb_v.set_footer(text=FOOTER)
+        view = DayVoteView(game)
+        msg_v = await ch.send(embed=emb_v, view=view)
+        try:
+            await asyncio.wait_for(self._wait_all_votes(game), timeout=DAY_VOTE_TIME)
+        except asyncio.TimeoutError:
+            pass
+        view.disable_all()
+        await msg_v.edit(view=view)
+        await self._process_day_votes(game)
+
+    async def _wait_all_votes(self, game):
+        while True:
+            if game.vote_event.is_set():
+                if game.day_votes and len(game.day_votes) >= len(game.alive):
+                    return
+            await asyncio.sleep(0.5)
+
+    async def _process_day_votes(self, game):
+        ch = game.channel
+        mayor_pid = next((p for p, r in game.roles.items() if r == 'mayor' and p in game.alive), None)
+
+        if not game.day_votes:
+            emb = discord.Embed(title="📊 لا يوجد تصويت", description="ما حدا صوت! يمكن الكل نايم 😂", color=COLOR_DAY)
+            emb.set_footer(text=FOOTER)
+            await ch.send(embed=emb)
+        else:
+            vc = {}
+            for voter_id, tid in game.day_votes.items():
+                weight = 2 if voter_id == mayor_pid else 1
+                vc[tid] = vc.get(tid, 0) + weight
+
+            mv = max(vc.values())
+            top = [t for t, c in vc.items() if c == mv]
+
+            if mayor_pid and mayor_pid in game.day_votes:
+                mn = game.players[mayor_pid].display_name
+                await ch.send(MAYOR_VOTE_NOTIFY.format(player=mn, votes=2))
+
+            rt = "**عدد الأصوات:**\n"
+            for tid, c in sorted(vc.items(), key=lambda x: -x[1]):
+                name = game.players[tid].display_name
+                bar = "█" * c + "░" * (mv - c) if mv > c else "█" * c
+                rt += f"**{name}**: {bar} {c} صوت\n"
+
+            emb = discord.Embed(title="📊 نتائج التصويت", description=rt, color=COLOR_DAY)
+            emb.set_footer(text=FOOTER)
+            await ch.send(embed=emb)
+            await asyncio.sleep(3)
+
+            if len(top) > 1:
+                emb_t = discord.Embed(
+                    title="⚖️ تعادل!",
+                    description="في تعادل! ولا أحد يطرد اليوم. الذئاب حظها حلو 😤",
+                    color=COLOR_DAY
+                )
+                emb_t.set_footer(text=FOOTER)
+                await ch.send(embed=emb_t)
+            else:
+                eliminated = top[0]
+                game.alive.discard(eliminated)
+                member = game.players[eliminated]
+                dm = random.choice(DEATH_MESSAGES).replace("{player}", member.display_name)
+                emb_e = discord.Embed(title=f"🚨 طرد!", description=dm, color=COLOR_DANGER)
+                emb_e.set_footer(text=FOOTER)
+                await ch.send(embed=emb_e)
+                role_key = game.roles.get(eliminated, 'unknown')
+                ri = ROLES_CONFIG.get(role_key, {})
+                await ch.send(f"🎭 **{member.display_name}** كانوا **{ri.get('emoji', '')} {ri.get('name', 'مجهول')}**")
+
+        await asyncio.sleep(2)
+        winner = self._check_win(game)
+        if winner:
+            await self._end_game_with_winner(game, winner)
+            return
+        self._reset_phase(game)
+        await self._run_night_phase(game)
+
+    async def _end_game_with_winner(self, game, winner):
+        ch = game.channel
+        if winner == 'werewolf':
+            msg = random.choice(WEREWOLF_WIN_MESSAGES)
+            color = COLOR_DANGER
+            title = "🐺 **انتهت اللعبة! فوز الذئاب!** 🌕"
+            img = GAME_GRAPHICS["werewolf_victory"]
+        else:
+            msg = random.choice(VILLAGER_WIN_MESSAGES)
+            color = COLOR_SUCCESS
+            title = "🏆 **انتهت اللعبة! فوز القرية!** 🎉"
+            img = GAME_GRAPHICS["villager_victory"]
+        all_players = "\n".join([
+            f"{ROLES_CONFIG[game.roles[pid]]['emoji']} {game.players[pid].display_name} - {ROLES_CONFIG[game.roles[pid]]['name']}"
+            for pid in game.players
+        ])
+        emb = discord.Embed(title=title, description=msg, color=color)
+        emb.set_image(url=img)
+        emb.add_field(name="📋 اللاعبون:", value=all_players, inline=False)
+        emb.set_footer(text=FOOTER)
+        await ch.send(embed=emb)
+        game.phase = 'ended'
+        self.end_game(game.guild_id)
+
+
+manager = GameManager()
+
+
+def create_role_embed(rk):
+    r = ROLES_CONFIG[rk]
+    emb = discord.Embed(title=f"{r['emoji']} {r['name']}", description=r['description'], color=COLOR_PRIMARY)
+    emb.set_image(url=r['image'])
+    emb.set_footer(text=FOOTER)
+    return emb
+
+
+def create_lobby_embed(game):
+    pl = "\n".join([f"**{i+1}.** 👤 {m.display_name}" for i, m in enumerate(game.players.values())])
+    c = len(game.players)
+    st = f"✅ **{c}/{MAX_PLAYERS}** لاعب"
+    if c >= MIN_PLAYERS:
+        st += "\n⏳ جارٍ بدء اللعبة قريباً..."
+    emb = discord.Embed(
+        title="🐺 **لعبة الذئب - اللوبي**",
+        description=f"{st}\n\n**قائمة اللاعبين:**\n{pl if pl else 'لا يوجد لاعبين بعد'}",
+        color=COLOR_LOBBY
+    )
+    emb.set_footer(text=FOOTER)
+    return emb
+
+
+class LobbyView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=None)
+        self.game = game
+
+    @discord.ui.button(label="انضمام", style=discord.ButtonStyle.green, emoji="➕")
+    async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.game.players:
+            return await interaction.response.send_message("🖐️ أنت منضم بالفعل!", ephemeral=True)
+        if len(self.game.players) >= MAX_PLAYERS:
+            return await interaction.response.send_message("❌ اللوبي ممتلئ!", ephemeral=True)
+        if self.game.phase != 'lobby':
+            return await interaction.response.send_message("❌ اللعبة بدأت بالفعل!", ephemeral=True)
+        self.game.players[interaction.user.id] = interaction.user
+        await interaction.response.send_message("✅ تم الانضمام بنجاح!", ephemeral=True)
+        await self._update()
+        if len(self.game.players) >= MIN_PLAYERS and not self.game.starting:
+            self.game.starting = True
+            asyncio.create_task(self._auto_start())
+
+    @discord.ui.button(label="مغادرة", style=discord.ButtonStyle.red, emoji="❌")
+    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.game.players:
+            return await interaction.response.send_message("🖐️ أنت لست منضم!", ephemeral=True)
+        if self.game.phase != 'lobby':
+            return await interaction.response.send_message("❌ اللعبة بدأت بالفعل!", ephemeral=True)
+        del self.game.players[interaction.user.id]
+        await interaction.response.send_message("✅ تمت المغادرة!", ephemeral=True)
+        await self._update()
+
+    @discord.ui.button(label="شرح اللعبة", style=discord.ButtonStyle.blurple, emoji="📖")
+    async def guide_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        emb = discord.Embed(title="📖 دليل لعبة الذئب", description=LOBBY_GUIDE_TEXT, color=COLOR_PRIMARY)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+    @discord.ui.button(label="مطور البوت", style=discord.ButtonStyle.grey, emoji="🛠️")
+    async def dev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        emb = discord.Embed(title="🛠️ مطور البوت", description=DEVELOPER_INFO, color=COLOR_PRIMARY)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+    async def _update(self):
+        emb = create_lobby_embed(self.game)
+        await self.game.lobby_message.edit(embed=emb, view=self)
+
+    async def _auto_start(self):
+        await asyncio.sleep(10)
+        game = self.game
+        if game.phase != 'lobby':
+            return
+        if len(game.players) < MIN_PLAYERS:
+            game.starting = False
+            game.phase = 'lobby'
+            emb = create_lobby_embed(game)
+            emb.description += "\n\n❌ لم يكتمل العدد، تم إلغاء البداية التلقائية"
+            await game.lobby_message.edit(embed=emb)
+            return
+        await manager.start_game(game.guild_id)
+
+
+class RoleRevealView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=60)
+        self.game = game
+
+    @discord.ui.button(label="🎭 اعرض دوري", style=discord.ButtonStyle.primary, emoji="🎭")
+    async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.game.roles:
+            return await interaction.response.send_message("❌ أنت لست في اللعبة!", ephemeral=True)
+        emb = create_role_embed(self.game.roles[interaction.user.id])
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+
+class WerewolfVoteView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=WEREWOLF_VOTE_TIME)
+        self.game = game
+
+    @discord.ui.button(label="🐺 تصويت الذئاب", style=discord.ButtonStyle.danger, emoji="🐺")
+    async def ww_vote(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid not in self.game.roles:
+            return await interaction.response.send_message("❌ أنت لست في اللعبة!", ephemeral=True)
+        if uid not in self.game.alive:
+            return await interaction.response.send_message("💀 أنت ميت!", ephemeral=True)
+        if self.game.roles[uid] != 'werewolf':
+            return await interaction.response.send_message("💤 ما عندك قدرة ليلية! نام نوووم 🌙", ephemeral=True)
+        if uid in self.game.night_votes:
+            return await interaction.response.send_message("✅你已经 صوّت!", ephemeral=True)
+        ww_ids = {pid for pid, r in self.game.roles.items() if r == 'werewolf'}
+        opts = []
+        for mid in self.game.alive:
+            if mid in ww_ids:
+                continue
+            opts.append(discord.SelectOption(label=self.game.players[mid].display_name, value=str(mid), emoji="👤"))
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد أهداف!", ephemeral=True)
+        sel = WerewolfSelect(self.game, uid, opts)
+        v = discord.ui.View(timeout=WEREWOLF_VOTE_TIME)
+        v.add_item(sel)
+        await interaction.response.send_message("🎯 اختر ضحيتك:", view=v, ephemeral=True)
+
+    def disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+
+class WerewolfSelect(discord.ui.Select):
+    def __init__(self, game, voter_id, options):
+        super().__init__(placeholder="اختر الهدف...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.voter_id = voter_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.voter_id:
+            return await interaction.response.send_message("❌ هذا ليس تصويتك!", ephemeral=True)
+        target_id = int(self.values[0])
+        self.game.night_votes[self.voter_id] = target_id
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم التصويت!", view=self.view)
+        manager._check_werewolf_done(self.game)
+
+
+class NightActionView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=NIGHT_ACTIONS_TIME)
+        self.game = game
+
+    @discord.ui.button(label="🌙 فعل القدرة الليلية", style=discord.ButtonStyle.secondary, emoji="🌙")
+    async def action(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid not in self.game.roles:
+            return await interaction.response.send_message("❌ أنت لست في اللعبة!", ephemeral=True)
+        if uid not in self.game.alive:
+            return await interaction.response.send_message("💀 أنت ميت!", ephemeral=True)
+
+        role = self.game.roles[uid]
+        if role not in NIGHT_ROLES_ACTION:
+            return await interaction.response.send_message("💤 ما عندك قدرة ليلية! نام نوووم 🌙", ephemeral=True)
+
+        if role == 'detective' and self.game.detective_used:
+            return await interaction.response.send_message("🔍 استخدمت قدرتك مسبقاً!", ephemeral=True)
+        if role == 'bodyguard' and self.game.bodyguard_used:
+            return await interaction.response.send_message("🛡️ استخدمت قدرتك مسبقاً!", ephemeral=True)
+        if uid in self.game.night_actors:
+            return await interaction.response.send_message("✅ تصرفت هذه الليلة!", ephemeral=True)
+
+        if role == 'detective':
+            await self._detective_action(interaction)
+        elif role == 'doctor':
+            await self._doctor_action(interaction)
+        elif role == 'bodyguard':
+            await self._bodyguard_action(interaction)
+        elif role == 'seductress':
+            await self._seductress_action(interaction)
+
+    async def _detective_action(self, interaction):
+        g = self.game
+        opts = [discord.SelectOption(label=g.players[mid].display_name, value=str(mid), emoji="👤") for mid in g.alive]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = DetectiveSelect(g, interaction.user.id, opts)
+        v = discord.ui.View(timeout=NIGHT_ACTIONS_TIME)
+        v.add_item(sel)
+        emb = discord.Embed(title="🔍 المحقق", description="اختر شخصاً لكشف حقيقته:", color=COLOR_NIGHT)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, view=v, ephemeral=True)
+
+    async def _doctor_action(self, interaction):
+        g = self.game
+        opts = [discord.SelectOption(label=g.players[mid].display_name, value=str(mid), emoji="👤") for mid in g.alive]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = DoctorSelect(g, interaction.user.id, opts)
+        v = discord.ui.View(timeout=NIGHT_ACTIONS_TIME)
+        v.add_item(sel)
+        emb = discord.Embed(title="⚕️ الطبيب", description="اختر من تبي تحميه هذه الليلة:", color=COLOR_NIGHT)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, view=v, ephemeral=True)
+
+    async def _bodyguard_action(self, interaction):
+        g = self.game
+        opts = [discord.SelectOption(label=g.players[mid].display_name, value=str(mid), emoji="👤") for mid in g.alive]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = BodyguardSelect(g, interaction.user.id, opts)
+        v = discord.ui.View(timeout=NIGHT_ACTIONS_TIME)
+        v.add_item(sel)
+        emb = discord.Embed(title="🛡️ الحارس", description="اختر من تعطيه درع الحماية (مرة واحدة):", color=COLOR_NIGHT)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, view=v, ephemeral=True)
+
+    async def _seductress_action(self, interaction):
+        g = self.game
+        opts = [discord.SelectOption(label=g.players[mid].display_name, value=str(mid), emoji="👤") for mid in g.alive if mid != interaction.user.id]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = SeductressSelect(g, interaction.user.id, opts)
+        v = discord.ui.View(timeout=NIGHT_ACTIONS_TIME)
+        v.add_item(sel)
+        emb = discord.Embed(title="💃 المغرية", description="اختاري من تزورين هذه الليلة:", color=COLOR_NIGHT)
+        emb.set_footer(text=FOOTER)
+        await interaction.response.send_message(embed=emb, view=v, ephemeral=True)
+
+    def disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+
+class DetectiveSelect(discord.ui.Select):
+    def __init__(self, game, pid, options):
+        super().__init__(placeholder="اختر المشتبه به...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.pid = pid
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.pid:
+            return await interaction.response.send_message("❌ هذا ليس اختيارك!", ephemeral=True)
+        target_id = int(self.values[0])
+        target_role = self.game.roles[target_id]
+        ri = ROLES_CONFIG[target_role]
+        self.game.detective_target = target_id
+        self.game.detective_used = True
+        self.game.night_actors.add(self.pid)
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم الكشف!", view=self.view)
+        rm = random.choice(DETECTIVE_REVEAL_PHRASES)
+        rm = rm.replace("{target}", self.game.players[target_id].display_name).replace("{emoji}", ri['emoji']).replace("{role}", ri['name'])
+        await interaction.followup.send(embed=discord.Embed(description=rm, color=COLOR_PRIMARY).set_footer(text=FOOTER), ephemeral=True)
+        manager._check_night_done(self.game)
+
+
+class DoctorSelect(discord.ui.Select):
+    def __init__(self, game, pid, options):
+        super().__init__(placeholder="اختر من تعالجه...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.pid = pid
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.pid:
+            return await interaction.response.send_message("❌ هذا ليس اختيارك!", ephemeral=True)
+        target_id = int(self.values[0])
+        if target_id == self.game.doctor_last_target:
+            return await interaction.response.send_message("❌ ما تقدر تحمي نفس الشخص مرتين متتاليتين!", ephemeral=True)
+        self.game.doctor_target = target_id
+        self.game.doctor_last_target = target_id
+        self.game.night_actors.add(self.pid)
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم اختيار المريض!", view=self.view)
+        manager._check_night_done(self.game)
+
+
+class BodyguardSelect(discord.ui.Select):
+    def __init__(self, game, pid, options):
+        super().__init__(placeholder="اختر من تحميه...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.pid = pid
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.pid:
+            return await interaction.response.send_message("❌ هذا ليس اختيارك!", ephemeral=True)
+        target_id = int(self.values[0])
+        self.game.bodyguard_target = target_id
+        self.game.bodyguard_used = True
+        self.game.night_actors.add(self.pid)
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم منح الدرع!", view=self.view)
+        manager._check_night_done(self.game)
+
+
+class SeductressSelect(discord.ui.Select):
+    def __init__(self, game, pid, options):
+        super().__init__(placeholder="اختاري من تزورين...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.pid = pid
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.pid:
+            return await interaction.response.send_message("❌ هذا ليس اختيارك!", ephemeral=True)
+        target_id = int(self.values[0])
+        self.game.seducer_target = target_id
+        self.game.night_actors.add(self.pid)
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تمت الزيارة!", view=self.view)
+        manager._check_night_done(self.game)
+
+
+class DayVoteView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=DAY_VOTE_TIME)
+        self.game = game
+
+    @discord.ui.button(label="🗳️ تصويت", style=discord.ButtonStyle.primary, emoji="🗳️")
+    async def vote_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid not in self.game.roles:
+            return await interaction.response.send_message("❌ أنت لست في اللعبة!", ephemeral=True)
+        if uid not in self.game.alive:
+            return await interaction.response.send_message("💀 أنت ميت! ما تقدر تصوت", ephemeral=True)
+        if uid in self.game.day_votes:
+            return await interaction.response.send_message("✅你已经 صوّت!", ephemeral=True)
+        opts = [discord.SelectOption(label=self.game.players[mid].display_name, value=str(mid), emoji="👤") for mid in self.game.alive]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = DayVoteSelect(self.game, uid, opts)
+        v = discord.ui.View(timeout=DAY_VOTE_TIME)
+        v.add_item(sel)
+        await interaction.response.send_message("🗳️ اختر من تبي تطرده:", view=v, ephemeral=True)
+
+    def disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+
+class DayVoteSelect(discord.ui.Select):
+    def __init__(self, game, voter_id, options):
+        super().__init__(placeholder="اختر المشتبه به...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.voter_id = voter_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.voter_id:
+            return await interaction.response.send_message("❌ هذا ليس تصويتك!", ephemeral=True)
+        target_id = int(self.values[0])
+        self.game.day_votes[self.voter_id] = target_id
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم التصويت!", view=self.view)
+        if len(self.game.day_votes) >= len(self.game.alive):
+            self.game.vote_event.set()
+
+
+class KingActionView(discord.ui.View):
+    def __init__(self, game, king_id):
+        super().__init__(timeout=KING_ACTION_TIME)
+        self.game = game
+        self.king_id = king_id
+
+    @discord.ui.button(label="👑 أمر ملكي", style=discord.ButtonStyle.danger, emoji="👑")
+    async def king_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.king_id:
+            return await interaction.response.send_message("❌ هذا ليس دورك!", ephemeral=True)
+        opts = [discord.SelectOption(label=self.game.players[mid].display_name, value=str(mid), emoji="👤") for mid in self.game.alive if mid != self.king_id]
+        if not opts:
+            return await interaction.response.send_message("❌ لا يوجد لاعبين!", ephemeral=True)
+        sel = KingSelect(self.game, self.king_id, opts)
+        v = discord.ui.View(timeout=KING_ACTION_TIME)
+        v.add_item(sel)
+        await interaction.response.send_message("👑 اختر من تطرد بأمر ملكي:", view=v, ephemeral=True)
+
+    def disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+
+class KingSelect(discord.ui.Select):
+    def __init__(self, game, king_id, options):
+        super().__init__(placeholder="اختر الضحية الملكية...", options=options[:25], min_values=1, max_values=1)
+        self.game = game
+        self.king_id = king_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.king_id:
+            return
+        target_id = int(self.values[0])
+        self.game.king_target = target_id
+        self.game.king_used = True
+        self.disabled = True
+        await interaction.response.edit_message(content="✅ تم إصدار الأمر!", view=self.view)
+        self.game.king_event.set()

@@ -1,260 +1,216 @@
-"""
-config.py — Werewolf Bot v3.0
-================================
-All constants, role definitions, image URLs, developer info,
-phase banners, game rules text, and the full social-commentary
-dictionary (Arabic / Saudi humour).
-
-Every image URL below is a placeholder from placehold.co —
-the developer can replace any URL with their own artwork.
-"""
-
 import os
-import random
 
-# ═══════════════════════════════════════════════════════════════
-# 1. GAME TIMING CONSTANTS
-# ═══════════════════════════════════════════════════════════════
+TOKEN = os.getenv('DISCORD_TOKEN')
+PREFIX = '-'
+FOOTER = "تحفظ كل الحقوق لي Vale Community"
 
-MIN_PLAYERS       = 6          # Minimum to start
-MAX_PLAYERS       = 20         # Lobby cap
-LOBBY_COUNTDOWN   = 60         # Seconds before lobby auto-starts
-NIGHT_DURATION    = 50         # Seconds for night phase
-VOTE_DURATION     = 60         # Seconds for voting phase
-DISCUSS_DURATION  = 30         # Seconds for day discussion before voting
+MIN_PLAYERS = 6
+MAX_PLAYERS = 12
+WEREWOLF_VOTE_TIME = 25
+NIGHT_ACTIONS_TIME = 40
+DAY_VOTE_TIME = 45
+KING_ACTION_TIME = 20
 
-# ═══════════════════════════════════════════════════════════════
-# 2. BOT CORE CONFIG
-# ═══════════════════════════════════════════════════════════════
-
-BOT_PREFIX       = "-"
-TOKEN            = os.getenv("DISCORD_TOKEN")
-
-# ═══════════════════════════════════════════════════════════════
-# 3. PHASE BANNERS — one image per phase, swapped dynamically
-# ═══════════════════════════════════════════════════════════════
-
-PHASE_IMAGES = {
-    "lobby":    "https://placehold.co/800x200/1a1a2e/eaeaea?text=🐺+Werewolf+Lobby&font=source-code-pro",
-    "night":    "https://placehold.co/800x200/0d0d1a/7b7baf?text=🌙+Night+Phase&font=source-code-pro",
-    "day":      "https://placehold.co/800x200/1a2e1a/bdeabd?text=☀️+Day+Phase&font=source-code-pro",
-    "voting":   "https://placehold.co/800x200/2e1a1a/eabdbd?text=🗳️+Voting+Time&font=source-code-pro",
-    "gameover": "https://placehold.co/800x200/1a1a2e/eaeaea?text=🏆+Game+Over&font=source-code-pro",
+GAME_GRAPHICS = {
+    "lobby_banner": "https://placehold.co/600x300?text=Lobby+Banner",
+    "night_phase": "https://placehold.co/600x300?text=Night+Phase",
+    "day_phase": "https://placehold.co/600x300?text=Day+Phase",
+    "werewolf": "https://placehold.co/400x400?text=Werewolf",
+    "villager": "https://placehold.co/400x400?text=Villager",
+    "witch": "https://placehold.co/400x400?text=Witch",
+    "seer": "https://placehold.co/400x400?text=Seer",
+    "hunter": "https://placehold.co/400x400?text=Hunter",
+    "detective": "https://placehold.co/400x400?text=Detective",
+    "bodyguard": "https://placehold.co/400x400?text=Bodyguard",
+    "king": "https://placehold.co/400x400?text=King",
+    "mayor": "https://placehold.co/400x400?text=Mayor",
+    "doctor": "https://placehold.co/400x400?text=Doctor",
+    "seductress": "https://placehold.co/400x400?text=Seductress",
+    "om_zaki": "https://placehold.co/400x400?text=Om+Zaki",
+    "werewolf_victory": "https://placehold.co/600x300?text=Werewolves+Win",
+    "villager_victory": "https://placehold.co/600x300?text=Villagers+Win",
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 4. DEVELOPER CREDIT
-# ═══════════════════════════════════════════════════════════════
-
-DEV_DISCORD    = "Laaw.q"
-DEV_INSTAGRAM  = "i7_tp2"
-FOOTER_TEXT    = "تحفظ كل الحقوق لي Vale Community"
-
-# ═══════════════════════════════════════════════════════════════
-# 5. ROLE DEFINITIONS  (9 roles, each with name, emoji, image)
-# ═══════════════════════════════════════════════════════════════
-
-ROLE_INFO = {
-    "wolf": {
-        "emoji": "🐺",
+ROLES_CONFIG = {
+    "werewolf": {
         "name": "الذيب",
-        "team": "wolf",
+        "emoji": "🐺",
+        "image": GAME_GRAPHICS["werewolf"],
+        "description": "يحاول التخلص من جميع الشخصيات والسيطرة على اللعبة بالكامل.",
+        "team": "werewolf",
         "night_action": True,
-        "desc": "تصوت مع باقي الذيابة بالليل لاغتيال شخص. تفوزون عندما يصبح عددكم ≥ القرويين.",
-        "ability": "🗡️ تقتل لاعباً كل ليلة",
-        "image_url": "https://placehold.co/400x200/2d1b3e/ffffff?text=🐺+Wolf&font=source-code-pro",
     },
     "villager": {
-        "emoji": "🧑‍🌾",
         "name": "القروي",
+        "emoji": "🧑‍🌾",
+        "image": GAME_GRAPHICS["villager"],
+        "description": "شخصية عادية، ما عنده قدرة خاصة لكن يشارك بالتصويت ويكشف الذيابة بالذكاء والتحليل.",
         "team": "village",
         "night_action": False,
-        "desc": "ليس لديك قدرة خاصة. تعتمد على تحليلك وصوتك في النهار لفضح الذيابة.",
-        "ability": "— لا توجد",
-        "image_url": "https://placehold.co/400x200/3a5a3a/ffffff?text=🌾+Villager&font=source-code-pro",
-    },
-    "detective": {
-        "emoji": "🔍",
-        "name": "المحقق",
-        "team": "village",
-        "night_action": True,
-        "desc": "تستطيع كشف هوية أي لاعب (مرة واحدة فقط في اللعبة). اختر بحكمة!",
-        "ability": "🔎 تكشف هوية لاعب (مرة واحدة)",
-        "image_url": "https://placehold.co/400x200/1a3e5a/ffffff?text=🔍+Detective&font=source-code-pro",
-    },
-    "guardian": {
-        "emoji": "🛡️",
-        "name": "الحارس",
-        "team": "village",
-        "night_action": True,
-        "desc": "تحمي لاعباً واحداً من هجوم الذيابة (مرة واحدة فقط في اللعبة).",
-        "ability": "🛡️ تحمي لاعباً (مرة واحدة)",
-        "image_url": "https://placehold.co/400x200/2a4a3a/ffffff?text=🛡️+Guardian&font=source-code-pro",
-    },
-    "king": {
-        "emoji": "👑",
-        "name": "الملك",
-        "team": "village",
-        "night_action": False,
-        "desc": "تقلب كل الأصوات على لاعب واحد وتخرجه فوراً من اللعبة. تستخدمها مرة أثناء التصويت.",
-        "ability": "👑 تقلب الأصوات وتطرد لاعباً (مرة واحدة)",
-        "image_url": "https://placehold.co/400x200/5a4a2a/ffffff?text=👑+King&font=source-code-pro",
     },
     "mayor": {
-        "emoji": "🏛️",
         "name": "العمدة",
+        "emoji": "🏛️",
+        "image": GAME_GRAPHICS["mayor"],
+        "description": "صوته أقوى من الجميع، حيث يُحسب التصويت الخاص فيه بصوتين!",
         "team": "village",
         "night_action": False,
-        "desc": "قدرة خاملة: صوتك في التصويت يحسب بصوتين بدلاً من واحد.",
-        "ability": "🏛️ صوتك = 2 أصوات",
-        "image_url": "https://placehold.co/400x200/2a3a5a/ffffff?text=🏛️+Mayor&font=source-code-pro",
+    },
+    "detective": {
+        "name": "المحقق",
+        "emoji": "🔍",
+        "image": GAME_GRAPHICS["detective"],
+        "description": "يقدر يكشف هوية أي لاعب مرة واحدة فقط طوال الجيم.",
+        "team": "village",
+        "night_action": True,
     },
     "doctor": {
-        "emoji": "⚕️",
         "name": "الطبيب",
+        "emoji": "⚕️",
+        "image": GAME_GRAPHICS["doctor"],
+        "description": "يستطيع حماية أي لاعب من القتل كل ليلة (يقدر يحمي نفسه، وما يقدر يكرر نفس الشخص).",
         "team": "village",
         "night_action": True,
-        "desc": "تحمي لاعباً واحداً كل ليلة من الموت. تستطيع حماية نفسك أيضاً.",
-        "ability": "💊 تحمي لاعباً كل ليلة",
-        "image_url": "https://placehold.co/400x200/2a5a4a/ffffff?text=⚕️+Doctor&font=source-code-pro",
+    },
+    "bodyguard": {
+        "name": "الحارس",
+        "emoji": "🛡️",
+        "image": GAME_GRAPHICS["bodyguard"],
+        "description": "يعطي درع حماية لأي لاعب ويحميه من القتل مرة واحدة فقط بالقيم.",
+        "team": "village",
+        "night_action": True,
     },
     "seductress": {
-        "emoji": "💃",
         "name": "المغرية",
+        "emoji": "💃",
+        "image": GAME_GRAPHICS["seductress"],
+        "description": "كل ليلة تزور شخص. إذا كان ذيب تموت معه. إذا كان شخص عادي وهاجمته الذئابة تحميه.",
         "team": "village",
         "night_action": True,
-        "desc": "تختارين شخصاً كل ليلة. إن كان ذئباً تموتين معه. إن كان بريئاً وهاجمه الذيابة تموتين بداله وتحمينه.",
-        "ability": "❤️‍🔥 تختبر شخصاً كل ليلة",
-        "image_url": "https://placehold.co/400x200/5a2a3a/ffffff?text=💃+Seductress&font=source-code-pro",
     },
-    "um_fadi": {
+    "om_zaki": {
+        "name": "أم زكي",
         "emoji": "👵",
-        "name": "أم فادي",
+        "image": GAME_GRAPHICS["om_zaki"],
+        "description": "إذا قتلتها الذئابة، تقوم بفضح أحد الذيابة قبل موتها في الشات العام.",
         "team": "village",
         "night_action": False,
-        "desc": "قدرة خاملة: إن قتلك الذيابة بالليل، يفضح البوت أحد الذيابة عشوائياً قبل أن تودعي اللعبة.",
-        "ability": "👵 تكشف ذيباً إذا ماتت",
-        "image_url": "https://placehold.co/400x200/3a2a5a/ffffff?text=👵+Um+Fadi&font=source-code-pro",
+    },
+    "king": {
+        "name": "الملك",
+        "emoji": "👑",
+        "image": GAME_GRAPHICS["king"],
+        "description": "يملك سلطة تحويل جميع الأصوات على لاعب واحد وطرده مباشرة مرة واحدة فقط بالقيم.",
+        "team": "village",
+        "night_action": False,
     },
 }
 
-# Roles that have unique special abilities (subset used when slots are tight)
-SPECIAL_ROLES = [
-    "detective", "doctor", "king", "mayor",
-    "guardian", "seductress", "um_fadi",
+NIGHT_ROLES_ACTION = ["detective", "doctor", "bodyguard", "seductress"]
+
+DEATH_MESSAGES = [
+    "🕊️ طيروا جبهة {player}.. عظم الله أجركم فيه وخيرها بغيرها!",
+    "💀 {player} ودعنا.. خلصت النبضات يا جماعة الخير!",
+    "😴 {player} رقد وما قام.. النومة الأبدية ياصاحبي!",
+    "🌬️ شيلوا {player} طار مع الريح! الله معاك يا حبيبنا",
+    "🐑 {player} انذبح ذبح النعاج! عظم الله أجركم",
+    "⚰️ طلع برا {player}.. المقعد ضيق وما يسعش لشخصين!",
+    "☠️ {player} صفيناها! سوينا له تنقية عامة للقائمة",
+    "🔪 {player} انغدر به محد درى عنه للأسف!",
+    "😭 وداعاً {player}.. ما كان يعرف إنها آخر جلسة لعب",
+    "🎭 انفضح أمر {player} وطيرناه برا!",
+    "🚀 {player} طار صاروخ! ما شاء الله سرعة انطلاقه",
+    "🪦 {player} صار قبره في وسع الصحرا.. الله يرحمه",
+    "💔 {player} خذوه رحمة الله.. كان فاضي بس والله",
+    "🥀 {player} ذبلت وردته وطحت! خلاص مشى",
+    "🔥 {player} طار بالهواء! بسبب السوالف الزايدة",
 ]
 
-# ═══════════════════════════════════════════════════════════════
-# 6. GAME RULES TEXT (for the 📖 شرح اللعبة embed)
-# ═══════════════════════════════════════════════════════════════
-
-RULES_INTRO = """
-**🐺 لعبة الذئب (Werewolf)** — لعبة اجتماعية تعتمد على التخمين والتحليل النفسي.
-
-تنقسم القرية إلى فريقين:
-• **🧑‍🌾 القرويون** — مهمتهم اكتشاف الذيابة وطردهم قبل أن يفنوهم.
-• **🐺 الذيابة** — يتخفون بين القرويين ويغتالونهم كل ليلة.
-
-**🏆 شروط الفوز:**
-• **القرويون:** يطردون كل الذيابة (يصبح عدد الذيابة = 0).
-• **الذيابة:** يصبح عددهم ≥ عدد القرويين الأحياء.
-
-**🔄 سير اللعبة:**
-1. **🌙 الليل:** ينام الجميع. الذين يملكون قدرات يصحون ويستخدمونها في السر.
-2. **☀️ النهار:** يستيقظ الجميع، يعلن البوت عمن قتل، ثم يتناقش اللاعبون.
-3. **🗳️ التصويت:** يصوت الجميع على من يشتبه به لإعدامه.
-4. 🔄 تتكرر الدورة حتى فوز أحد الفريقين.
-
-**💡 نصيحة:** القرويون يعتمدون على التحليل والاستنتاج. الذيابة يعتمدون على التمويه والتضليل.
-"""
-
-def build_rules_embed() -> "discord.Embed":
-    """Build the full rules embed with all role descriptions."""
-    import discord
-    embed = discord.Embed(
-        title="📖 شرح اللعبة الكامل",
-        description=RULES_INTRO,
-        color=discord.Color.blue(),
-    )
-    for rkey, rinfo in ROLE_INFO.items():
-        embed.add_field(
-            name=f"{rinfo['emoji']} {rinfo['name']} ({rinfo['team']})",
-            value=f"{rinfo['desc']}\n✦ قدرة: {rinfo['ability']}",
-            inline=False,
-        )
-    embed.set_footer(text=FOOTER_TEXT)
-    return embed
-
-# ═══════════════════════════════════════════════════════════════
-# 7. SOCIAL COMMENTARY — Arabic / Saudi Humour Dictionary
-# ═══════════════════════════════════════════════════════════════
-
-DEATH_ROASTS = [
-    "طيروا جبهته 🌚 عظم الله أجركم في {name}",
-    "مسكين {name} .. مدري ليه جرب حظه مع الذيابة 🐺",
-    "{name} ودعنا .. كان عنده عزيمة بس الحظ ما خدمه 😂",
-    "الليلة {name} في ذمة الله .. والذياب يعدون الفلوس 🐺💰",
-    "والله من بدري كان مكتوب على جبهة {name} (خروج) 💀",
-    "{name} صكها مع الذياب ودخل في ذمة التاريخ 🪦",
-    "ياخي {name} طلع خروف بين ذياب 🐑🐺",
-    "الله يرحمك يا {name} .. كنت إنسان طيب بس شكلك مشبوه 😂",
-    "{name} اكتشف متأخر انه في غابة ذياب 🐺",
-    "حسبنا الله ونعم الوكيل .. {name} انتهى مشواره 🪦",
-    "يا {name} والله انك ضحية فيلم رعب 🔪",
-    "{name} فكنا من شرك .. نم قرير العين 🛌💀",
-    "اللي ما يطول العنب .. {name} حامض عنه 😂",
-    "{name} ! انصدمت من النتيجة؟ 🤯",
-    "الناس تغدي على بعض .. و {name} مات على العشاء 🍽️💀",
+WEREWOLF_WIN_MESSAGES = [
+    "🐺 انتصرت الذئاب! القرويين كلهم صاروا عشاء فاخر! ألف مبروك يا وحوش 🌕",
+    "🐺 الذئاب فازت ألف مبروك! القرويين كانوا قطيع غنم وهم نايمين! استاهلوا 😂",
+    "🐺 فوز ساحق للذئاب! يا ناس القرويين كانوا فاضحين حقيقة 🎉👏",
 ]
 
-WOLF_WIN_ROASTS = [
-    "🐺🐺 انتصار الذيابة!\nالقرويين كانوا يحسبون أنهم فاهمين اللعبة بس الذياب كانوا فالمطبخ من البداية 😂\nيلا يا قرويين، العيد غير مرة 🎮",
-    "🐺 الذياب قالوا:\n'هذي القرية ملكنا يا جماعة الخير! القرويين يا حلوين شكل موسمكم انتهى 😂'\nمبروك للذيبان الشجعان! 🏆",
-    "🐺🐺🐺 الذياب فازوا ولا عليكم امر!\nترى ما يجيب الذيب إلا القروي اللي ما يعرف يخبي 🐑\nيلا ورونا شطارتكم المرة الجاية 😂",
-    "🐺 القصة بدأت وانتهت بسرعة .. القرويين كانوا ديكور 😂\nالذيبان يستلمون القرية اليوم! 🏘️👑",
-    "🐺 الذيب إذا جاء يخطف ما يفرق معه كبير ولا صغير .. القرويين طاروا واحد ورا الثاني 😂\nمبروك الذيبان الأبطال! 🎉",
+VILLAGER_WIN_MESSAGES = [
+    "🎉 القرويون انتصروا! طلعتوا الذئاب من جحورهم ودحدرتوهم! ما عليكم إلا العوض يا ذياب 😂",
+    "🎉 القرية فازت! الذئاب انجلدت جلدة عمرها وتستاهل! أبطال والله 💪",
+    "🎉 انتصار القرويين! الذئاب راحت فيها وصارت عظم بالصحراء ☠️😂",
 ]
 
-VILLAGE_WIN_ROASTS = [
-    "🎉🎊 القرويين أبطال! 🎊🎉\nخلصنا من شر الذياب وقالوا:\n'يلا يا ذيبان، فيه موسم ثاني وبتشوفونا 💪'\nمبروك للقرية المقدامة! 🔥",
-    "🎉 انتصار القرويين!\nالذياب كانوا يحسبون اللعبة سهلة بس القرويين عطوهم درس في الفلاحة 😂\nيلا يا ذيبان ورونا شطارتكم في الجاي 🐺",
-    "🎊 القرويين سحلوها!\nمن قد ما الذياب كانوا واثقين، القرويين قلبوا الطاولة عليهم 🔄\nمبروك يا أبطال! تستاهلون ✅",
-    "🎊 القرية انتصرت والذيبان يعدون الحساب!\nالقرويين أثبتوا ان اللي ما يعرف الصقر يشويه 🔥\nالذيبان انفضحوا وانكشف مستواهم 😂",
-    "🎉 خلاص يا ذيبان .. انتهى العز 😂\nالقرويين أظهروكم على حقيقتكم 🐺➡️🐑\nيللا وراكم ورا 🏃💨",
+SEDUCER_DEATH_MESSAGES = [
+    "💃 {seducer} زارت {target} وطلعت ذيب! ماتوا سوا يا ناس 🔥🐺",
+    "💃 {seducer} اكتشفت أن {target} ذيب وقضت عليه! بس راحت معاه 🌙",
+    "💃 المغرية {seducer} ضحّت بنفسها عشان تكشف {target}! تصفيق 👏",
 ]
 
-NIGHT_COMMENTS = [
-    "الذياب ما قصروا هالليلة .. انتقوا ضحيتهم بعناية 😂",
-    "الليل كان طويل والذيبان كانوا جوعانين 🐺",
-    "صوت عظام الضحايا يتكسر في ظلمة الليل 🦴",
-    "الذيبان يسهرون والقرية نايمة .. تصير خير 😂",
-    "ها قد جاء الليل .. والذياب يدورون عشاء 🐺🍽️",
+SEDUCER_SAVE_MESSAGES = [
+    "💃 {seducer} كانت عند {target} الليلة! الذئاب هجموا عليه بس هي حمته 💪",
+    "💃 المغرية {seducer} أنقذت {target} من براثن الذئابة!",
 ]
 
-NIGHT_SAFE_COMMENTS = [
-    "الليلة كانت هادئة .. الذياب نايمين ولا شفنا لهم خبر 😂",
-    "لا قتلى ولا عزاء .. الذياب فيهم خير هالليلة 🤷",
-    "الذيبان مساكين ما لقوا ضحية .. عسى الله يعينهم بكرة 🐺💔",
+OM_ZAKI_EXPOSE_MESSAGES = [
+    "👵 أم زكي قبل لا تموت: **{werewolf}** هو الذيب! فضحته لكم 😱😱",
+    "👵 أم زكي فضحت أحد الذيابة قبل وفاتها: **{werewolf}** ذيب يا ناس! ☠️",
+    "👵 أم زكي صاحت: {werewolf} ذيب! خذوه قبل لا يهرب 🐺🚨",
 ]
 
-VOTE_COMMENTS = [
-    "التصويت فتح .. والكل يبي يطقطق على الثالث 😂",
-    "كل واحد يصوت على الثاني .. والذيب واقف يتفرج 🐺",
-    "ترى يا جماعة .. اللي يصوت عشانه ما عنده سالفة 😂",
+DETECTIVE_REVEAL_PHRASES = [
+    "🔍 بعد تحري دقيق، **{target}** هو {emoji} **{role}**!",
+    "🔍 المحقق كشف المستور: **{target}** = {emoji} **{role}**!",
 ]
 
-def random_death_roast(name: str) -> str:
-    return random.choice(DEATH_ROASTS).format(name=name)
+BODYGUARD_SAVE_MSGS = [
+    "🛡️ الحارس حمى {player} من الموت الليلة! درعه ما ينكسر 💪",
+    "🛡️ {player} كان ميت لولا الحارس! حماية بطولية 🔥",
+]
 
-def random_wolf_win() -> str:
-    return random.choice(WOLF_WIN_ROASTS)
+DOCTOR_HEAL_MSGS = [
+    "⚕️ الطبيب عالج {player} وأنقذه من الموت! حكمة يدويه 💉",
+    "⚕️ {player} نجا بفضل الطبيب! حقنة في وقتها 🔄",
+]
 
-def random_village_win() -> str:
-    return random.choice(VILLAGE_WIN_ROASTS)
+KING_DECREE_MSGS = [
+    "👑 الملك أصدر أمره: {player} يُطرد فوراً! ما حد يعارض أمر الملك 📜",
+    "👑 بأمر الملك: {player} برا اللعبة! الملك يقرر والكل ينفذ ⚖️",
+]
 
-def random_night_comment(killed: bool = True) -> str:
-    pool = NIGHT_COMMENTS if killed else NIGHT_SAFE_COMMENTS
-    return random.choice(pool)
+MAYOR_VOTE_NOTIFY = "🏛️ العمدة **{player}**: صوت = **{votes}** (صوتين)"
 
-def random_vote_comment() -> str:
-    return random.choice(VOTE_COMMENTS)
+LOBBY_GUIDE_TEXT = (
+    "**🎮 لعبة الذئب (Werewolf) - الدليل الشامل**\n\n"
+    "**📖 القصة:**\n"
+    "في قرية صغيرة، فيه ذئاب شريرة متخفية بين القرويين. النهار الكل يتصوت، والليل الذئاب تقتل!\n\n"
+    "**👥 الأدوار (9 شخصيات):**\n\n"
+    "**🐺 الذيب** - فريقه: الذئاب\n"
+    "يحاول التخلص من جميع الشخصيات والسيطرة على اللعبة بالكامل.\n\n"
+    "**🧑‍🌾 القروي** - فريقه: القرية\n"
+    "شخصية عادية، ما عنده قدرة خاصة لكن يشارك بالتصويت.\n\n"
+    "**🔍 المحقق** - فريقه: القرية\n"
+    "يقدر يكشف هوية أي لاعب **مرة واحدة** فقط.\n\n"
+    "**🛡️ الحارس** - فريقه: القرية\n"
+    "يعطي درع حماية لأي لاعب ويحميه من القتل **مرة واحدة**.\n\n"
+    "**👑 الملك** - فريقه: القرية\n"
+    "يملك سلطة طرد أي لاعب مباشرة **مرة واحدة** (بدون تصويت).\n\n"
+    "**🏛️ العمدة** - فريقه: القرية\n"
+    "صوته يحسب بـ **صوتين** في التصويت النهاري.\n\n"
+    "**⚕️ الطبيب** - فريقه: القرية\n"
+    "يقدر يحمي شخص كل ليلة (يقدر يحمي نفسه).\n\n"
+    "**💃 المغرية** - فريقه: القرية\n"
+    "تزور شخص بالليل: لو كان ذيب يموتون سوا، لو طبيعي تحميه.\n\n"
+    "**👵 أم زكي** - فريقه: القرية\n"
+    "إذا ماتت على يد الذئاب تفضح واحد منهم قبل لا تموت.\n\n"
+    "**🏆 الفوز:**\n"
+    "• القرية تفوز إذا ماتت كل الذئاب 🎉\n"
+    "• الذئاب تفوز إذا صار عددهم >= عدد القرويين 🐺\n\n"
+    "**⭐ استمتعوا باللعبة!**"
+)
+
+DEVELOPER_INFO = "**🛠️ مطور البوت**\n\n**الاسم:** Laaw.q\n**الإنستغرام:** i7_tp2\n\nتم تطوير هذا البوت بعناية ❤️"
+
+COLOR_PRIMARY = 0x2b2d31
+COLOR_SUCCESS = 0x57F287
+COLOR_DANGER = 0xED4245
+COLOR_NIGHT = 0x1a1a2e
+COLOR_DAY = 0xf5d742
+COLOR_LOBBY = 0x5865F2
