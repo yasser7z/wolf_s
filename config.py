@@ -1,230 +1,220 @@
 import os
 
-TOKEN = os.getenv('DISCORD_TOKEN')
-PREFIX = '-'
-FOOTER = "تحفظ كل الحقوق لي Vale Community"
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+COMMAND_PREFIX = '-'
 
+LOBBY_TIMEOUT = 120
+NIGHT_TIMEOUT = 60
+VOTE_TIMEOUT = 60
+DISCUSSION_TIME = 30
 MIN_PLAYERS = 6
-MAX_PLAYERS = 12
-WEREWOLF_VOTE_TIME = 25
-NIGHT_ACTIONS_TIME = 40
-DAY_VOTE_TIME = 45
-KING_ACTION_TIME = 20
+MAX_PLAYERS = 15
+
+FOOTER_TEXT = "تحفظ كل الحقوق لي Vale Community"
 
 GAME_GRAPHICS = {
-    "lobby_banner": "https://placehold.co/600x300/1a1a2e/f5d742?text=Werewolf+Game+Lobby",
-    "night_phase": "https://placehold.co/600x300/0d0d1a/4a4ae0?text=🌙+Night+Falls",
-    "day_phase": "https://placehold.co/600x300/f5d742/1a1a2e?text=☀️+Day+Phase",
-    "werewolf": "https://placehold.co/400x400/1a1a2e/ff4444?text=🐺+Werewolf",
-    "villager": "https://placehold.co/400x400/2b2d31/ffffff?text=🧑‍🌾+Villager",
-    "detective": "https://placehold.co/400x400/1a3a5c/00ccff?text=🔍+Detective",
-    "bodyguard": "https://placehold.co/400x400/3a2a1a/ff8800?text=🛡️+Bodyguard",
-    "king": "https://placehold.co/400x400/3a1a2a/ffd700?text=👑+King",
-    "mayor": "https://placehold.co/400x400/2a3a1a/44ff44?text=🏛️+Mayor",
-    "doctor": "https://placehold.co/400x400/1a3a2a/00ff88?text=⚕️+Doctor",
-    "seductress": "https://placehold.co/400x400/3a1a3a/ff66ff?text=💃+Seductress",
-    "om_zaki": "https://placehold.co/400x400/3a2a2a/ffaa66?text=👵+Om+Zaki",
-    "werewolf_victory": "https://placehold.co/600x300/1a0000/ff4444?text=🐺+Werewolves+Win",
-    "villager_victory": "https://placehold.co/600x300/001a00/44ff44?text=🎉+Village+Wins",
+    "lobby": "https://images.unsplash.com/photo-1518709766631-a6c7f7855e6d?w=800&q=80",
+    "night": "https://images.unsplash.com/photo-1508162942367-e4dd0cd9f993?w=800&q=80",
+    "day": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&q=80",
+    "wolf_win": "https://images.unsplash.com/photo-1504208434309-cb69f4fe52b0?w=800&q=80",
+    "village_win": "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&q=80",
+    "wolf": "https://images.unsplash.com/photo-1546182990-dffeafbe841d?w=800&q=80",
+    "villager": "https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&q=80",
+    "detective": "https://images.unsplash.com/photo-1578680634064-86452d1f0ac7?w=800&q=80",
+    "guard": "https://images.unsplash.com/photo-1550345332-09e3ac987658?w=800&q=80",
+    "king": "https://images.unsplash.com/photo-1534683252180-92e0b2eb4c7b?w=800&q=80",
+    "mayor": "https://images.unsplash.com/photo-1571676020624-1b8c5da0f7e5?w=800&q=80",
+    "doctor": "https://images.unsplash.com/photo-1551076805-e1869033e561?w=800&q=80",
+    "seductress": "https://images.unsplash.com/photo-1509966756634-9c23e0a7664a?w=800&q=80",
+    "zeki_mom": "https://images.unsplash.com/photo-1544027993-37dbfe43562a?w=800&q=80",
 }
 
-AI_ART_PROMPTS = {
-    "lobby_banner": "Dark fantasy desert village at dusk, square banner, glowing moon silhouette, ancient arabic-inspired architecture, moody purple-orange sky, cinematic lighting, 2D illustration style",
-    "night_phase": "Dark starry desert night, crescent moon casting silver light on sand dunes, mysterious glowing eyes in the darkness, arabian nights atmosphere, 2D fantasy illustration, moody dark blues and purples",
-    "day_phase": "Golden sunrise over an arabian-style village, warm sand-colored buildings, market stalls, villagers gathering in the square, hopeful warm atmosphere, 2D fantasy illustration",
-    "werewolf": "Fierce werewolf transformation under full moon, dark fur, glowing red eyes, standing on two legs, arabian desert background, dramatic lighting, dark fantasy character art, 2D illustration",
-    "villager": "Simple arabian village man in traditional thawb and shemagh, kind face, holding a lantern, mud-brick buildings background, warm colors, 2D character portrait",
-    "detective": "Mysterious detective in arabian-inspired outfit with a magnifying glass and notebook, searching for clues, dark alley background, intense focused expression, 2D character art",
-    "bodyguard": "Powerful warrior in traditional arabian armor with a large shield, protective stance, muscular build, desert fortress background, bronze and steel tones, 2D character art",
-    "king": "Majestic arabian king on ornate throne, golden crown, royal robes, sceptre in hand, grand palace hall with pillars, warm gold and crimson, 2D royal portrait",
-    "mayor": "Dignified mayor figure in formal arabian attire, standing at a podium, scroll in hand, village council chamber background, wise expression, 2D character portrait",
-    "doctor": "Traditional arabian healer with herbal pouch, surgical mask, holding medical tools, cozy lamp-lit tent interior with medicine shelves, caring expression, 2D character art",
-    "seductress": "Enchanting arabian dancer with flowing silk veil, mysterious smile, dark eyeshadow, intricate gold jewelry, moonlit balcony background, elegant and dangerous, 2D character art",
-    "om_zaki": "Elderly arabian grandmother with a knowing smirk, traditional embroidered dress, holding a small dagger hidden in her sleeve, wise weathered face, 2D character portrait",
-    "werewolf_victory": "Werewolf pack howling at giant crimson moon, defeated village in background, victory stance, dark fantasy scene, cinematic wide shot, 2D illustration",
-    "villager_victory": "Village celebration at sunrise, villagers cheering, werewolf pelts on display, children playing, hopeful triumphant atmosphere, warm golden lighting, 2D illustration",
-}
-
-ROLES_CONFIG = {
-    "werewolf": {
-        "name": "الذيب",
+ROLES = {
+    "wolf": {
+        "name_ar": "الذيب",
         "emoji": "🐺",
-        "image": GAME_GRAPHICS["werewolf"],
-        "description": "يحاول التخلص من جميع الشخصيات والسيطرة على اللعبة بالكامل.",
-        "team": "werewolf",
+        "team": "wolf",
+        "description": "في الليل تختار ضحية مع الذيبان الباقيين. فريسة سهلة ولا تحدي؟",
         "night_action": True,
+        "max_uses": None,
+        "priority": 1,
     },
     "villager": {
-        "name": "القروي",
+        "name_ar": "القروي",
         "emoji": "🧑‍🌾",
-        "image": GAME_GRAPHICS["villager"],
-        "description": "شخصية عادية، ما عنده قدرة خاصة لكن يشارك بالتصويت ويكشف الذيابة بالذكاء والتحليل.",
         "team": "village",
+        "description": "ما عندك قدرة ليلية. بس عندك صوت في التصويت النهاري. استخدم عقلك عشان تعرف مين الذيبان!",
         "night_action": False,
-    },
-    "mayor": {
-        "name": "العمدة",
-        "emoji": "🏛️",
-        "image": GAME_GRAPHICS["mayor"],
-        "description": "صوته أقوى من الجميع، حيث يُحسب التصويت الخاص فيه بصوتين!",
-        "team": "village",
-        "night_action": False,
+        "max_uses": None,
+        "priority": 99,
     },
     "detective": {
-        "name": "المحقق",
+        "name_ar": "المحقق",
         "emoji": "🔍",
-        "image": GAME_GRAPHICS["detective"],
-        "description": "يقدر يكشف هوية أي لاعب مرة واحدة فقط طوال الجيم.",
         "team": "village",
+        "description": "تقدر تتحرى عن لاعب واحد في الليل وتعرف هويته بالضبط. استخدمها بحكمة.. فرصة وحدة!",
         "night_action": True,
+        "max_uses": 1,
+        "priority": 6,
     },
-    "doctor": {
-        "name": "الطبيب",
-        "emoji": "⚕️",
-        "image": GAME_GRAPHICS["doctor"],
-        "description": "يستطيع حماية أي لاعب من القتل كل ليلة (يقدر يحمي نفسه، وما يقدر يكرر نفس الشخص).",
-        "team": "village",
-        "night_action": True,
-    },
-    "bodyguard": {
-        "name": "الحارس",
+    "guard": {
+        "name_ar": "الحارس",
         "emoji": "🛡️",
-        "image": GAME_GRAPHICS["bodyguard"],
-        "description": "يعطي درع حماية لأي لاعب ويحميه من القتل مرة واحدة فقط بالقيم.",
         "team": "village",
+        "description": "تقدر تحمي لاعب واحد من براثن الذئاب لليلة كاملة. مرة وحدة في الجيم فاستخدمها صح!",
         "night_action": True,
-    },
-    "seductress": {
-        "name": "المغرية",
-        "emoji": "💃",
-        "image": GAME_GRAPHICS["seductress"],
-        "description": "كل ليلة تزور شخص. إذا كان ذيب تموت معه. إذا كان شخص عادي وهاجمته الذئابة تحميه.",
-        "team": "village",
-        "night_action": True,
-    },
-    "om_zaki": {
-        "name": "أم زكي",
-        "emoji": "👵",
-        "image": GAME_GRAPHICS["om_zaki"],
-        "description": "إذا قتلتها الذئابة، تقوم بفضح أحد الذيابة قبل موتها في الشات العام.",
-        "team": "village",
-        "night_action": False,
+        "max_uses": 1,
+        "priority": 2,
     },
     "king": {
-        "name": "الملك",
+        "name_ar": "الملك",
         "emoji": "👑",
-        "image": GAME_GRAPHICS["king"],
-        "description": "يملك سلطة تحويل جميع الأصوات على لاعب واحد وطرده مباشرة مرة واحدة فقط بالقيم.",
         "team": "village",
+        "description": "مرة وحدة في الجيم، تقدر تجبر كل الأصوات على لاعب واحد في التصويت النهاري. الكلمة العليا لك!",
         "night_action": False,
+        "max_uses": 1,
+        "priority": 98,
+    },
+    "mayor": {
+        "name_ar": "العمدة",
+        "emoji": "🏛️",
+        "team": "village",
+        "description": "مكانتك الاجتماعية تخلي صوتك يحسب بصوتين في التصويت. القرويون يثقون فيك، لا تخذلهم!",
+        "night_action": False,
+        "max_uses": None,
+        "priority": 98,
+    },
+    "doctor": {
+        "name_ar": "الطبيب",
+        "emoji": "⚕️",
+        "team": "village",
+        "description": "كل ليلة تقدر تحمي لاعب واحد من الموت. اختار بحكمة، أرواح القرويين بين يديك!",
+        "night_action": True,
+        "max_uses": None,
+        "priority": 4,
+    },
+    "seductress": {
+        "name_ar": "المغرية",
+        "emoji": "💃",
+        "team": "village",
+        "description": "تزورين لاعب كل ليلة. إذا زرتي الذيب تموتين معه. إذا زرتي ضحية الذيبان تحمينها. مقامرة خطيرة!",
+        "night_action": True,
+        "max_uses": None,
+        "priority": 5,
+    },
+    "zeki_mom": {
+        "name_ar": "أم زكي",
+        "emoji": "👵",
+        "team": "village",
+        "description": "ما عندك قدرة ليلية. بس إذا الذيبان ذبحوك، فضحتي واحد منهم قبل الموت. أم زكي ما تموت ببلاش!",
+        "night_action": False,
+        "max_uses": None,
+        "priority": 99,
     },
 }
 
-NIGHT_ROLES_ACTION = ["detective", "doctor", "bodyguard", "seductress"]
+HUMOR = {
+    "death_comments": [
+        "طيروا جبهته.. عظم الله أجركم فيه",
+        "انرفد من اللعبة على طوول مسكين",
+        "مات شهيد القرية. اللهم تقبله عندك",
+        "الله يرحمه كان إنسان طيب وصراحة ما نعرفه",
+        "انمسح من قائمة اللاعبين",
+        "ودعناه على كف حافي",
+        "أول ما بدينا نعرفه انصدمنا بوفاته",
+        "طلع يلعب على البلايستيشن الحين",
+        "مسكين ماعرف يلعب.. طلع فلاح",
+        "واثق من نفسه يبغى يفوز.. طلعلوه الموت",
+        "الله يقلع شيطانه ويسكنه فسيح جناته",
+        "نعيماً يالحبيب.. في جيم ثاني ممكن",
+        "قعد ياكل من طلع له الذيب",
+        "حظه انه مات يمكن القادم أجمل",
+    ],
+    "wolf_win": [
+        "الذيبان سيطروا على القرية والكل ياكل تراب",
+        "قالو الذيب يطلع يلعب علينا.. طلعلنا كلنا",
+        "يا حظ الذيبان.. القرويين نايمين بالعسل",
+        "الذيبان أكلت القرية ولبست أسود",
+        "أحسن لعب من الذيبان.. القرويين عشاء دسم",
+        "قالو مانبي الذيب يكسب.. طلعلهم كسب",
+        "شافوا الذيب ولا صدقوا.. والله يخزي العيون",
+        "الذيبان فازوا والباقي ياكل تراب",
+        "القرويين فشلوا فشل ذريع",
+    ],
+    "village_win": [
+        "القرية تغلبت على الذيبان.. كل ذيب وله زمان",
+        "الذيبان انصادوا مثل الجرذان",
+        "القرويين أبطال.. الذيبان ياكلون هواء",
+        "خلصت الحكاية.. الذيبان في الزنازين",
+        "واثق من نفسه يبغى ياكل القرويين.. طلعلوه ياكل هواء",
+        "الذيب قال انا الجاي.. طلعلوه القرويين عظموا عليه",
+        "الذئاب انهزموا هزيمة نكراء",
+        "الليلة نومة نصر.. الذيبان شالوا خسارة",
+        "مبروك يا قرية. الذيبان راحوا مع الخسارة",
+    ],
+    "vote_comments": [
+        "فلان صار براءة مثل الثلج بعد هالتصويت",
+        "الكل نبح على فلان. مسكين",
+        "صوتك مشكوك في أمره يا أخوي",
+        "من جدك كذا؟ تبي تطرد فلان؟",
+        "يديك أوكيتا وفوك مفروكة",
+        "والله انك فاهم وجالس تقرر صح",
+        "هذا التصويت يخزي العيون",
+        "فلان ماله ذنب بس الجيم كذا",
+        "انت قدها وتقدر تدمر سمعة فلان",
+    ],
+    "game_start": [
+        "الجيم بدأ.. نبي تركيز ولا نبي خرايط",
+        "اللي يعرف يلعب يتفضل واللي ما يعرف يتفرج",
+        "نبدأ.. محد يطلع نفسه من اللعبة",
+        "من يتأخر يروح مع الخاسرين",
+    ],
+    "night_fall": [
+        "الليل حل والكل نام.. إلا اللي عنده قدرة",
+        "ظلمة الليل تخفي الكثير.. الذئاب تتحرك",
+        "سواد الليل غطى القرية.. كل واحد وله سر",
+    ],
+    "day_break": [
+        "الفجر طلع.. خلنا نشوف مين عاش ومين مات",
+        "الصبح جميل والقرية صاحية.. هل الكل موجود؟",
+        "شروق الشمس يبدد الظلام ويظهر الحقائق",
+    ],
+}
 
-DEATH_MESSAGES = [
-    "🕊️ طيروا جبهة {player}.. عظم الله أجركم فيه وخيرها بغيرها!",
-    "💀 {player} ودعنا.. خلصت النبضات يا جماعة الخير!",
-    "😴 {player} رقد وما قام.. النومة الأبدية ياصاحبي!",
-    "🌬️ شيلوا {player} طار مع الريح! الله معاك يا حبيبنا",
-    "🐑 {player} انذبح ذبح النعاج! عظم الله أجركم",
-    "⚰️ طلع برا {player}.. المقعد ضيق وما يسعش لشخصين!",
-    "☠️ {player} صفيناها! سوينا له تنقية عامة للقائمة",
-    "🔪 {player} انغدر به محد درى عنه للأسف!",
-    "😭 وداعاً {player}.. ما كان يعرف إنها آخر جلسة لعب",
-    "🎭 انفضح أمر {player} وطيرناه برا!",
-    "🚀 {player} طار صاروخ! ما شاء الله سرعة انطلاقه",
-    "🪦 {player} صار قبره في وسع الصحرا.. الله يرحمه",
-    "💔 {player} خذوه رحمة الله.. كان فاضي بس والله",
-    "🥀 {player} ذبلت وردته وطحت! خلاص مشى",
-    "🔥 {player} طار بالهواء! بسبب السوالف الزايدة",
-]
+DEVELOPER = {
+    "discord": "Laaw.q",
+    "instagram": "i7_tp2",
+}
 
-WEREWOLF_WIN_MESSAGES = [
-    "🐺 انتصرت الذئاب! القرويين كلهم صاروا عشاء فاخر! ألف مبروك يا وحوش 🌕",
-    "🐺 الذئاب فازت ألف مبروك! القرويين كانوا قطيع غنم وهم نايمين! استاهلوا 😂",
-    "🐺 فوز ساحق للذئاب! يا ناس القرويين كانوا فاضحين حقيقة 🎉👏",
-]
+GAME_RULES = """
+**🐺 الذئب (Wolf)**
+في الليل يختار ضحية مع باقي الذئاب. ياكلون قراوين على العشاء.
 
-VILLAGER_WIN_MESSAGES = [
-    "🎉 القرويون انتصروا! طلعتوا الذئاب من جحورهم ودحدرتوهم! ما عليكم إلا العوض يا ذياب 😂",
-    "🎉 القرية فازت! الذئاب انجلدت جلدة عمرها وتستاهل! أبطال والله 💪",
-    "🎉 انتصار القرويين! الذئاب راحت فيها وصارت عظم بالصحراء ☠️😂",
-]
+**🧑‍🌾 القروي (Villager)**
+ما عنده قدرة ليلية. بس صوته مهم في التصويت النهاري.
 
-SEDUCER_DEATH_MESSAGES = [
-    "💃 {seducer} زارت {target} وطلعت ذيب! ماتوا سوا يا ناس 🔥🐺",
-    "💃 {seducer} اكتشفت أن {target} ذيب وقضت عليه! بس راحت معاه 🌙",
-    "💃 المغرية {seducer} ضحّت بنفسها عشان تكشف {target}! تصفيق 👏",
-]
+**🔍 المحقق (Detective)**
+يقدر يتحرى عن لاعب واحد ليلة وحدة ويعرف هويته.
 
-SEDUCER_SAVE_MESSAGES = [
-    "💃 {seducer} كانت عند {target} الليلة! الذئاب هجموا عليه بس هي حمته 💪",
-    "💃 المغرية {seducer} أنقذت {target} من براثن الذئابة!",
-]
+**🛡️ الحارس (Guard)**
+يحمي لاعب واحد ليلة وحدة من الذئاب. استخدام واحد فقط.
 
-OM_ZAKI_EXPOSE_MESSAGES = [
-    "👵 أم زكي قبل لا تموت: **{werewolf}** هو الذيب! فضحته لكم 😱😱",
-    "👵 أم زكي فضحت أحد الذيابة قبل وفاتها: **{werewolf}** ذيب يا ناس! ☠️",
-    "👵 أم زكي صاحت: {werewolf} ذيب! خذوه قبل لا يهرب 🐺🚨",
-]
+**👑 الملك (King)**
+مرة وحدة يجبر كل الأصوات على لاعب واحد في التصويت.
 
-DETECTIVE_REVEAL_PHRASES = [
-    "🔍 بعد تحري دقيق، **{target}** هو {emoji} **{role}**!",
-    "🔍 المحقق كشف المستور: **{target}** = {emoji} **{role}**!",
-]
+**🏛️ العمدة (Mayor)**
+صوته يحسب بصوتين. نفوذ وسلطة.
 
-BODYGUARD_SAVE_MSGS = [
-    "🛡️ الحارس حمى {player} من الموت الليلة! درعه ما ينكسر 💪",
-    "🛡️ {player} كان ميت لولا الحارس! حماية بطولية 🔥",
-]
+**⚕️ الطبيب (Doctor)**
+يحمي لاعب كل ليلة من الموت.
 
-DOCTOR_HEAL_MSGS = [
-    "⚕️ الطبيب عالج {player} وأنقذه من الموت! حكمة يدويه 💉",
-    "⚕️ {player} نجا بفضل الطبيب! حقنة في وقتها 🔄",
-]
+**💃 المغرية (Seductress)**
+تزور لاعب كل ليلة. إذا زارت الذئب تموت معه، وإذا زارت ضحيته تحميها.
 
-KING_DECREE_MSGS = [
-    "👑 الملك أصدر أمره: {player} يُطرد فوراً! ما حد يعارض أمر الملك 📜",
-    "👑 بأمر الملك: {player} برا اللعبة! الملك يقرر والكل ينفذ ⚖️",
-]
+**👵 أم زكي (Zeki's Mom)**
+إذا ماتت على يد الذئاب، تفضح واحد منهم قبل الموت.
 
-MAYOR_VOTE_NOTIFY = "🏛️ العمدة **{player}**: صوت = **{votes}** (صوتين)"
-
-LOBBY_GUIDE_TEXT = (
-    "**🎮 لعبة الذئب (Werewolf) - الدليل الشامل**\n\n"
-    "**📖 القصة:**\n"
-    "في قرية صغيرة، فيه ذئاب شريرة متخفية بين القرويين. النهار الكل يتصوت، والليل الذئاب تقتل!\n\n"
-    "**👥 الأدوار (9 شخصيات):**\n\n"
-    "**🐺 الذيب** - فريقه: الذئاب\n"
-    "يحاول التخلص من جميع الشخصيات والسيطرة على اللعبة بالكامل.\n\n"
-    "**🧑‍🌾 القروي** - فريقه: القرية\n"
-    "شخصية عادية، ما عنده قدرة خاصة لكن يشارك بالتصويت.\n\n"
-    "**🔍 المحقق** - فريقه: القرية\n"
-    "يقدر يكشف هوية أي لاعب **مرة واحدة** فقط.\n\n"
-    "**🛡️ الحارس** - فريقه: القرية\n"
-    "يعطي درع حماية لأي لاعب ويحميه من القتل **مرة واحدة**.\n\n"
-    "**👑 الملك** - فريقه: القرية\n"
-    "يملك سلطة طرد أي لاعب مباشرة **مرة واحدة** (بدون تصويت).\n\n"
-    "**🏛️ العمدة** - فريقه: القرية\n"
-    "صوته يحسب بـ **صوتين** في التصويت النهاري.\n\n"
-    "**⚕️ الطبيب** - فريقه: القرية\n"
-    "يقدر يحمي شخص كل ليلة (يقدر يحمي نفسه).\n\n"
-    "**💃 المغرية** - فريقه: القرية\n"
-    "تزور شخص بالليل: لو كان ذيب يموتون سوا، لو طبيعي تحميه.\n\n"
-    "**👵 أم زكي** - فريقه: القرية\n"
-    "إذا ماتت على يد الذئاب تفضح واحد منهم قبل لا تموت.\n\n"
-    "**🏆 الفوز:**\n"
-    "• القرية تفوز إذا ماتت كل الذئاب 🎉\n"
-    "• الذئاب تفوز إذا صار عددهم >= عدد القرويين 🐺\n\n"
-    "**⭐ استمتعوا باللعبة!**"
-)
-
-DEVELOPER_INFO = "**🛠️ مطور البوت**\n\n**الاسم:** Laaw.q\n**الإنستغرام:** i7_tp2\n\nتم تطوير هذا البوت بعناية ❤️"
-
-COLOR_PRIMARY = 0x2b2d31
-COLOR_SUCCESS = 0x57F287
-COLOR_DANGER = 0xED4245
-COLOR_NIGHT = 0x1a1a2e
-COLOR_DAY = 0xf5d742
-COLOR_LOBBY = 0x5865F2
+**🏆 شروط الفوز:**
+• **الذئاب:** عدد الذئاب = عدد القرويين أو أكثر.
+• **القرويين:** قتل جميع الذئاب.
+"""
