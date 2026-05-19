@@ -111,7 +111,7 @@ class LobbyView(discord.ui.View):
         embed.add_field(name="🎯 الهدف", value="**القرويون:** اكشفوا واطردوا كل الذيابة.\n**الذيابة 🐺:** اغتالوا القرويين حتى يصبح عددكم ≥ عددهم.", inline=False)
         for rkey, rinfo in ROLE_INFO.items():
             embed.add_field(name=f"{rinfo['emoji']} {rinfo['name']} ({rinfo['team']})", value=f"{rinfo['desc']}\n✦ قدرة: {rinfo['ability']}", inline=False)
-        embed.set_footer(text="استمتعوا باللعبة! 🎮")
+        embed.set_footer(text="تحفظ كل الحقوق لي Vale Community")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _refresh(self):
@@ -150,96 +150,143 @@ def build_lobby_embed(session: GameSession, remaining: int = LOBBY_COUNTDOWN) ->
 # ─── Night Action View ────────────────────────────────────────────────────────
 
 class NightActView(discord.ui.View):
+    """Role-specific action buttons. Each role gets its own button; the correct
+       player sees their role embed + target selection in one ephemeral message."""
+
     def __init__(self, session: GameSession):
         super().__init__(timeout=NIGHT_DURATION + 5)
         self.session = session
+        self._add_role_buttons()
 
-    @discord.ui.button(label="تصرف الآن", emoji="🌙", style=discord.ButtonStyle.primary, custom_id="night_act")
-    async def act_btn(self, interaction: discord.Interaction, btn: discord.ui.Button):
+    def _add_role_buttons(self):
+        eng = self.session.engine
+        roles_present = {p.role for p in eng.players.values() if p.alive}
+
+        row0 = [
+            ("wolf", "صيد", discord.ButtonStyle.danger, "🐺"),
+            ("detective", "تحقق", discord.ButtonStyle.primary, "🔍"),
+            ("doctor", "عالج", discord.ButtonStyle.success, "⚕️"),
+        ]
+        row1 = [
+            ("guardian", "احم", discord.ButtonStyle.success, "🛡️"),
+            ("seductress", "اغوي", discord.ButtonStyle.secondary, "💃"),
+        ]
+
+        for items, row in [(row0, 0), (row1, 1)]:
+            for role_name, label, style, emoji in items:
+                if role_name in roles_present:
+                    btn = discord.ui.Button(label=label, emoji=emoji, style=style, row=row)
+                    btn.callback = self._make_role_cb(role_name)
+                    self.add_item(btn)
+
+        btn = discord.ui.Button(label="دوري", emoji="🎭", style=discord.ButtonStyle.secondary, row=2)
+        btn.callback = self._myrole_cb
+        self.add_item(btn)
+
+    def _make_role_cb(self, role_name):
+        async def cb(interaction: discord.Interaction):
+            eng = self.session.engine
+            pid = interaction.user.id
+            p = eng.get_player(pid)
+            if not p or not p.alive:
+                return await interaction.response.send_message("❌ أنت ميت!", ephemeral=True)
+            if p.role != role_name:
+                return await interaction.response.send_message(f"❌ هذا الزر للـ {ROLE_INFO[role_name]['emoji']} {ROLE_INFO[role_name]['name']}!", ephemeral=True)
+            if pid in eng.night_actions_done:
+                return await interaction.response.send_message("✅ أديت واجبك هذه الليلة!", ephemeral=True)
+
+            if role_name == "detective" and p.detective_used:
+                return await interaction.response.send_message("🔍 استخدمت قدرتك من قبل!", ephemeral=True)
+            if role_name == "guardian" and p.guardian_used:
+                return await interaction.response.send_message("🛡️ استخدمت قدرتك من قبل!", ephemeral=True)
+
+            r = ROLE_INFO[role_name]
+            e = discord.Embed(title=f"{r['emoji']} دورك: {r['name']}", description=r['desc'], color=discord.Color.purple())
+            e.add_field(name="✦ قدرتك", value=r['ability'], inline=False)
+            e.add_field(name="🏠 الفريق", value="🐺 الذياب" if role_name == "wolf" else "🧑‍🌾 القرويين")
+            if role_name == "wolf":
+                fellow = [safe_name(w, eng) for w in eng.living_wolves if w != pid]
+                if fellow:
+                    e.add_field(name="🐺 رفاقك", value=", ".join(fellow), inline=False)
+            if r.get("image_url"):
+                e.set_image(url=r["image_url"])
+
+            living = [eng.players[i] for i in eng.living_ids if i != pid]
+            all_living = [eng.players[i] for i in eng.living_ids]
+            v = discord.ui.View(timeout=NIGHT_DURATION)
+
+            if role_name == "wolf":
+                if not living:
+                    return await interaction.response.send_message(embed=e, ephemeral=True)
+                sel = discord.ui.Select(placeholder="🐺 اختر ضحيتك", options=player_options(living), min_values=1, max_values=1)
+                async def wolf_sel(inter):
+                    eng.set_wolf_vote(pid, int(sel.values[0]))
+                    await inter.response.send_message("🐺 ✅ تم!", ephemeral=True); sel.disabled = True
+                    await inter.edit_original_response(view=v); await check_night_done(self.session)
+                sel.callback = wolf_sel
+
+            elif role_name == "doctor":
+                sel = discord.ui.Select(placeholder="⚕️ اختر من تعالجه", options=player_options(all_living), min_values=1, max_values=1)
+                async def doc_sel(inter):
+                    eng.set_doctor_target(pid, int(sel.values[0]))
+                    await inter.response.send_message("⚕️ ✅ تم!", ephemeral=True); sel.disabled = True
+                    await inter.edit_original_response(view=v); await check_night_done(self.session)
+                sel.callback = doc_sel
+
+            elif role_name == "seductress":
+                if not living:
+                    return await interaction.response.send_message(embed=e, ephemeral=True)
+                sel = discord.ui.Select(placeholder="💃 اختري هدفك", options=player_options(living), min_values=1, max_values=1)
+                async def sed_sel(inter):
+                    eng.set_seductress_target(pid, int(sel.values[0]))
+                    await inter.response.send_message("💃 ✅ تم!", ephemeral=True); sel.disabled = True
+                    await inter.edit_original_response(view=v); await check_night_done(self.session)
+                sel.callback = sed_sel
+
+            elif role_name == "detective":
+                if not living:
+                    return await interaction.response.send_message(embed=e, ephemeral=True)
+                sel = discord.ui.Select(placeholder="🔍 اختر من تحقق منه", options=player_options(living), min_values=1, max_values=1)
+                async def det_sel(inter):
+                    eng.set_detective_target(pid, int(sel.values[0]))
+                    await inter.response.send_message("🔍 ✅ تم!", ephemeral=True); sel.disabled = True
+                    await inter.edit_original_response(view=v); await check_night_done(self.session)
+                sel.callback = det_sel
+
+            elif role_name == "guardian":
+                if not living:
+                    return await interaction.response.send_message(embed=e, ephemeral=True)
+                sel = discord.ui.Select(placeholder="🛡️ اختر من تحميه", options=player_options(living), min_values=1, max_values=1)
+                async def gua_sel(inter):
+                    eng.set_guardian_target(pid, int(sel.values[0]))
+                    await inter.response.send_message("🛡️ ✅ تم!", ephemeral=True); sel.disabled = True
+                    await inter.edit_original_response(view=v); await check_night_done(self.session)
+                sel.callback = gua_sel
+
+            else:
+                return await interaction.response.send_message(embed=e, ephemeral=True)
+
+            v.add_item(sel)
+            await interaction.response.send_message(embed=e, view=v, ephemeral=True)
+        return cb
+
+    async def _myrole_cb(self, interaction: discord.Interaction):
         eng = self.session.engine
         pid = interaction.user.id
         p = eng.get_player(pid)
-        if not p or not p.alive:
-            return await interaction.response.send_message("❌ أنت ميت!", ephemeral=True)
-        if eng.state != GameState.NIGHT:
-            return await interaction.response.send_message("❌ ليس وقت الليل!", ephemeral=True)
-
-        living_objs = [eng.players[i] for i in eng.living_ids if i != pid]
-        all_objs = [eng.players[i] for i in eng.living_ids]
-        role = p.role
-
-        if role == "wolf" and living_objs:
-            view, select = self._make_select(living_objs, "🐺 اختر ضحيتك")
-            async def cb(inter: discord.Interaction):
-                tid = int(select.values[0])
-                eng.set_wolf_vote(pid, tid)
-                await inter.response.send_message("🐺 ✅ تم!", ephemeral=True)
-                select.disabled = True
-                await inter.edit_original_response(view=view)
-                await check_night_done(self.session)
-            select.callback = cb
-            view.add_item(select)
-            return await interaction.response.send_message("🐺 اختر من تريد قتله:", view=view, ephemeral=True)
-
-        elif role == "doctor" and all_objs:
-            view, select = self._make_select(all_objs, "⚕️ اختر من تعالجه")
-            async def cb(inter: discord.Interaction):
-                tid = int(select.values[0])
-                eng.set_doctor_target(pid, tid)
-                await inter.response.send_message("⚕️ ✅ تم!", ephemeral=True)
-                select.disabled = True
-                await inter.edit_original_response(view=view)
-                await check_night_done(self.session)
-            select.callback = cb
-            view.add_item(select)
-            return await interaction.response.send_message("⚕️ اختر من تعالجه (نفسك مسموح):", view=view, ephemeral=True)
-
-        elif role == "seductress" and living_objs:
-            view, select = self._make_select(living_objs, "💃 اختر هدفك")
-            async def cb(inter: discord.Interaction):
-                tid = int(select.values[0])
-                eng.set_seductress_target(pid, tid)
-                await inter.response.send_message("💃 ✅ تم!", ephemeral=True)
-                select.disabled = True
-                await inter.edit_original_response(view=view)
-                await check_night_done(self.session)
-            select.callback = cb
-            view.add_item(select)
-            return await interaction.response.send_message("💃 اختاري شخصاً:", view=view, ephemeral=True)
-
-        elif role == "detective" and not p.detective_used and living_objs:
-            view, select = self._make_select(living_objs, "🔍 اختر من تحقق منه")
-            async def cb(inter: discord.Interaction):
-                tid = int(select.values[0])
-                eng.set_detective_target(pid, tid)
-                await inter.response.send_message("🔍 ✅ جاري التحقيق...", ephemeral=True)
-                select.disabled = True
-                await inter.edit_original_response(view=view)
-                await check_night_done(self.session)
-            select.callback = cb
-            view.add_item(select)
-            return await interaction.response.send_message("🔍 اختر شخصاً للتحقيق:", view=view, ephemeral=True)
-
-        elif role == "guardian" and not p.guardian_used and living_objs:
-            view, select = self._make_select(living_objs, "🛡️ اختر من تحميه")
-            async def cb(inter: discord.Interaction):
-                tid = int(select.values[0])
-                eng.set_guardian_target(pid, tid)
-                await inter.response.send_message("🛡️ ✅ تم!", ephemeral=True)
-                select.disabled = True
-                await inter.edit_original_response(view=view)
-                await check_night_done(self.session)
-            select.callback = cb
-            view.add_item(select)
-            return await interaction.response.send_message("🛡️ اختر شخصاً لحمايته:", view=view, ephemeral=True)
-
-        else:
-            await interaction.response.send_message("💤 ليس لديك قدرة هذه الليلة...", ephemeral=True)
-
-    def _make_select(self, players: list, placeholder: str):
-        view = discord.ui.View(timeout=NIGHT_DURATION)
-        select = discord.ui.Select(placeholder=placeholder, options=player_options(players), min_values=1, max_values=1)
-        return view, select
+        if not p:
+            return await interaction.response.send_message("❌ لست في اللعبة!", ephemeral=True)
+        r = ROLE_INFO[p.role]
+        e = discord.Embed(title=f"{r['emoji']} دورك: {r['name']}", description=r['desc'], color=discord.Color.purple())
+        e.add_field(name="✦ قدرتك", value=r['ability'], inline=False)
+        e.add_field(name="🏠 الفريق", value="🐺 الذياب" if p.role == "wolf" else "🧑‍🌾 القرويين")
+        if p.role == "wolf":
+            fellow = [safe_name(w, eng) for w in eng.living_wolves if w != pid]
+            if fellow:
+                e.add_field(name="🐺 رفاقك", value=", ".join(fellow), inline=False)
+        if r.get("image_url"):
+            e.set_image(url=r["image_url"])
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
     async def on_timeout(self):
         self.stop()
@@ -308,30 +355,6 @@ class VoteView(discord.ui.View):
     async def on_timeout(self):
         self.stop()
 
-# ─── Role Reveal View ─────────────────────────────────────────────────────────
-
-class RoleRevealView(discord.ui.View):
-    def __init__(self, session: GameSession):
-        super().__init__(timeout=30)
-        self.session = session
-
-    @discord.ui.button(label="اعرف دوري", emoji="🎭", style=discord.ButtonStyle.primary)
-    async def reveal_btn(self, interaction: discord.Interaction, btn: discord.ui.Button):
-        pid = interaction.user.id
-        p = self.session.engine.get_player(pid)
-        if not p:
-            return await interaction.response.send_message("❌ لست في اللعبة!", ephemeral=True)
-        r = ROLE_INFO[p.role]
-        e = discord.Embed(title=f"{r['emoji']} دورك: {r['name']}", description=r['desc'], color=discord.Color.purple())
-        e.add_field(name="✦ قدرتك", value=r['ability'], inline=False)
-        e.add_field(name="🏠 الفريق", value="🐺 الذياب" if p.role == "wolf" else "🧑‍🌾 القرويين")
-        if p.role == "wolf":
-            fellow = [safe_name(w, self.session.engine) for w in self.session.engine.living_wolves if w != pid]
-            if fellow:
-                e.add_field(name="🐺 رفاقك", value=", ".join(fellow), inline=False)
-        e.set_footer(text="حافظ على سرية دورك!")
-        await interaction.response.send_message(embed=e, ephemeral=True)
-
 # ─── Game Flow ────────────────────────────────────────────────────────────────
 
 async def check_night_done(session: GameSession):
@@ -378,23 +401,19 @@ async def start_game(session: GameSession):
     eng.state = GameState.NIGHT
     eng.day_number = 1
 
-    embed = discord.Embed(title="🐺 بدأت اللعبة!", description="تم توزيع الأدوار... اضغط الزر لمعرفة دورك.", color=discord.Color.green())
+    embed = discord.Embed(
+        title="🐺 بدأت اللعبة!",
+        description="تم توزيع الأدوار. لكل ذي قدرة، استخدم أزرار الليل بالأسفل.\n🧑‍🌾 القرويون: ناقشوا و حللوا في النهار.",
+        color=discord.Color.green()
+    )
     players_str = "\n".join(f"👤 {p.name}" for p in eng.players.values())
     embed.add_field(name="👥 اللاعبين", value=players_str, inline=False)
+    embed.set_footer(text="تحفظ كل الحقوق لي Vale Community")
     if session.lobby_message:
         try:
             await session.lobby_message.edit(embed=embed, view=None)
         except discord.NotFound:
             pass
-
-    view = RoleRevealView(session)
-    msg = await session.channel.send("🎭 **اضغط الزر لمعرفة دورك!**", view=view)
-    await asyncio.sleep(8)
-    view.stop()
-    try:
-        await msg.edit(view=None)
-    except discord.NotFound:
-        pass
 
     await lock_channel(session)
     await run_night_phase(session)
@@ -422,7 +441,7 @@ async def run_night_phase(session: GameSession):
         eng.night_actions_done.clear()
 
         embed = discord.Embed(title=f"🌙 الليل {eng.day_number}", description="الجميع ناموا... الذين لديهم قدرات يتحركون في الظل.", color=discord.Color.from_rgb(10, 10, 40))
-        embed.set_footer(text=f"🐺 {len(eng.living_wolves)} ذيب | 👥 {len(eng.living_ids)} أحياء")
+        embed.set_footer(text=f"🐺 {len(eng.living_wolves)} ذيب | 👥 {len(eng.living_ids)} أحياء — تحفظ كل الحقوق لي Vale Community")
 
         view = NightActView(session)
         session.current_view = view
@@ -466,6 +485,7 @@ async def resolve_night_phase(session: GameSession):
         morning_embed.add_field(name="👵 أم فادي تكشف!", value=f"{safe_name(result.exposed_wolf, eng)} 🐺 ذيب!", inline=False)
 
     morning_embed.add_field(name="👥 المتبقون", value=f"{len(eng.living_ids)} لاعب", inline=False)
+    morning_embed.set_footer(text="تحفظ كل الحقوق لي Vale Community")
     await session.channel.send(embed=morning_embed)
 
     if result.detective_result:
@@ -502,7 +522,7 @@ async def run_voting_phase(session: GameSession):
         extra = "🏛️ (×2)" if p.role == "mayor" else ""
         extra += " 👑" if (p.role == "king" and not p.king_used) else ""
         embed.add_field(name=f"👤 {p.name}", value=extra or "—", inline=True)
-    embed.set_footer(text=f"{len(eng.living_ids)} يصوتون | {VOTE_DURATION} ثانية")
+    embed.set_footer(text=f"{len(eng.living_ids)} يصوتون | {VOTE_DURATION} ثانية — تحفظ كل الحقوق لي Vale Community")
 
     view = VoteView(session)
     session.current_view = view
@@ -553,6 +573,7 @@ async def end_game(session: GameSession, winner: str):
     )
     embed.add_field(name="📋 الأدوار النهائية", value=roles_str, inline=False)
     embed.add_field(name="👥 المتبقون", value=f"{len(eng.living_ids)} لاعب", inline=False)
+    embed.set_footer(text="تحفظ كل الحقوق لي Vale Community")
     await session.channel.send(embed=embed)
     games.pop(session.channel.id, None)
 
@@ -614,6 +635,18 @@ async def wolf_status(interaction: discord.Interaction):
     dead = "\n".join(f"💀 {eng.players[pid].name}" for pid in eng.dead_ids) or "—"
     embed.add_field(name="✅ أحياء", value=alive, inline=True)
     embed.add_field(name="💀 موتى", value=dead, inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="developer", description="ℹ️ معلومات المطور")
+async def developer(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="ℹ️ معلومات المطور",
+        description="تم تطوير هذا البوت بواسطة:",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="👤 ديسكورد", value="**Laaw.q**", inline=False)
+    embed.add_field(name="📸 إنستغرام", value="**i7_tp2**", inline=False)
+    embed.set_footer(text="تحفظ كل الحقوق لي Vale Community")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
