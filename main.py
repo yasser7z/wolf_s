@@ -1,7 +1,21 @@
+import os
+import threading
+from flask import Flask
 import discord
 from discord.ext import commands
-from config import TOKEN, PREFIX, FOOTER, COLOR_PRIMARY, COLOR_DANGER, MAX_PLAYERS, MIN_PLAYERS
+from config import TOKEN, PREFIX, FOOTER, COLOR_PRIMARY, COLOR_DANGER
 from game_engine import manager, create_lobby_embed, LobbyView
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Werewolf Bot is running!"
+
+def keep_alive():
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False), daemon=True).start()
+    print(f"[KEEP ALIVE] Flask server running on port {port}")
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
@@ -73,4 +87,5 @@ async def on_command_error(ctx: commands.Context, error):
 if __name__ == '__main__':
     if not TOKEN:
         raise ValueError("❌ DISCORD_TOKEN غير موجود في متغيرات البيئة!")
+    keep_alive()
     bot.run(TOKEN)
