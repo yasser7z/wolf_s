@@ -33,6 +33,8 @@ class InteractionRouter {
     const customId = interaction.customId || '';
     const start = Date.now();
 
+    logger.debug(`🔀 محاولة توجيه: ${customId} من ${interaction.user?.id || '?'}`);
+
     for (const mw of this.globalMiddleware) {
       try {
         const result = await mw(interaction);
@@ -44,16 +46,32 @@ class InteractionRouter {
     }
 
     const matchedRoutes = this._matchRoute(customId);
+    if (matchedRoutes.length === 0) {
+      logger.warn(`⚠️ [Router] لا يوجد مسار للتفاعل: "${customId}"`);
+      if (!interaction.replied && !interaction.deferred) {
+        try {
+          await interaction.reply({ content: '❌ هذا الزر غير متاح حالياً.', ephemeral: true });
+        } catch { }
+      }
+      return;
+    }
 
     for (const entry of matchedRoutes) {
       if (entry.cooldown > 0) {
         const remaining = this._checkCooldown(interaction.user.id, entry.route);
         if (remaining > 0) {
           try {
-            await interaction.reply({
-              content: `⏳ انتظر ${Math.ceil(remaining / 1000)} ثانية قبل استخدام هذا الزر.`,
-              ephemeral: true,
-            });
+            if (interaction.replied || interaction.deferred) {
+              await interaction.followUp({
+                content: `⏳ انتظر ${Math.ceil(remaining / 1000)} ثانية قبل استخدام هذا الزر.`,
+                ephemeral: true,
+              });
+            } else {
+              await interaction.reply({
+                content: `⏳ انتظر ${Math.ceil(remaining / 1000)} ثانية قبل استخدام هذا الزر.`,
+                ephemeral: true,
+              });
+            }
           } catch { }
           return;
         }
@@ -74,17 +92,28 @@ class InteractionRouter {
           route: entry.route,
           duration,
         });
+        logger.debug(`✅ ${customId} processed in ${duration}ms`);
       } catch (err) {
-        logger.error(`❌ Interaction route ${entry.route}:`, err.message);
-        try {
-          await interaction.reply({
-            content: '❌ حدث خطأ أثناء معالجة التفاعل.',
-            ephemeral: true,
-          });
-        } catch { }
+        logger.error(`❌ Interaction route ${entry.route} (${interaction.user?.id}):`, err.stack || err.message);
+        if (!interaction.replied && !interaction.deferred) {
+          try {
+            await interaction.reply({
+              content: '❌ حدث خطأ أثناء معالجة التفاعل.',
+              ephemeral: true,
+            });
+          } catch { }
+        }
       }
 
       return;
+    }
+
+    // No matching entry executed
+    logger.warn(`⚠️ [Router] لم ينفذ أي معالج لـ: "${customId}"`);
+    if (!interaction.replied && !interaction.deferred) {
+      try {
+        await interaction.reply({ content: '❌ لا يمكن معالجة هذا التفاعل.', ephemeral: true });
+      } catch { }
     }
   }
 

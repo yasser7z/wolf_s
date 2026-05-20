@@ -76,44 +76,61 @@ class RouteRegistry {
   }
 
   /**
+   * Safely reply to an interaction, handling all edge cases.
+   */
+  static async _safeReply(interaction, content) {
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(content);
+      } else {
+        await interaction.reply(content);
+      }
+    } catch { }
+  }
+
+  /**
    * Wrap a handler with session lookup + security + error handling.
    */
   static _wrap(sessionManager, handler) {
     return async (interaction) => {
       try {
         if (!sessionManager) {
-          return interaction.reply({ content: '❌ مدير الجلسات غير متاح.', ephemeral: true });
+          await RouteRegistry._safeReply(interaction, { content: '❌ مدير الجلسات غير متاح.', ephemeral: true });
+          return;
         }
 
         // Session lookup
         const session = sessionManager.getSessionInGuild(interaction.guildId);
         if (!session) {
-          return interaction.reply({ content: '❌ لا توجد جلسة نشطة.', ephemeral: true });
+          await RouteRegistry._safeReply(interaction, { content: '❌ لا توجد جلسة نشطة.', ephemeral: true });
+          logger.warn(`⚠️ [Route] لا توجد جلسة في السيرفر ${interaction.guildId} للتفاعل ${interaction.customId}`);
+          return;
         }
 
         // Session health check
         const health = SecurityGuard.validateSessionHealth(session);
         if (!health.valid) {
-          return interaction.reply({ content: `❌ ${health.reason}`, ephemeral: true });
+          await RouteRegistry._safeReply(interaction, { content: `❌ ${health.reason}`, ephemeral: true });
+          return;
         }
 
         // User ownership check for private actions
         const player = session.players.find(p => p.id === interaction.user.id);
         if (!player && !['lobby:join', 'lobby:explain'].includes(interaction.customId)) {
-          return interaction.reply({ content: '❌ أنت لست في هذه اللعبة.', ephemeral: true });
+          await RouteRegistry._safeReply(interaction, { content: '❌ أنت لست في هذه اللعبة.', ephemeral: true });
+          return;
         }
 
         // Dead player check for game actions
         if (player && !player.alive) {
-          return interaction.reply({ content: '💀 أنت ميت.', ephemeral: true });
+          await RouteRegistry._safeReply(interaction, { content: '💀 أنت ميت.', ephemeral: true });
+          return;
         }
 
         await handler(interaction, session);
       } catch (err) {
-        logger.error(`❌ [Route] ${interaction.customId}:`, err.message);
-        try {
-          await interaction.reply({ content: '❌ حدث خطأ.', ephemeral: true });
-        } catch { }
+        logger.error(`❌ [Route] ${interaction.customId} (user: ${interaction.user?.id}):`, err.stack || err.message);
+        await RouteRegistry._safeReply(interaction, { content: '❌ حدث خطأ.', ephemeral: true });
       }
     };
   }

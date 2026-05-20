@@ -65,7 +65,13 @@ class BasePhase {
   }
 
   async reply(interaction, content) {
-    return interaction.reply(content).catch(() => {});
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(content);
+      } else {
+        await interaction.reply(content);
+      }
+    } catch { }
   }
 
   sleep(ms) {
