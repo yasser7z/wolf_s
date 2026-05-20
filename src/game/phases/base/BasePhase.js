@@ -67,7 +67,8 @@ class BasePhase {
   async reply(interaction, content) {
     try {
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(content);
+        const { ephemeral, ...safeContent } = content;
+        await interaction.editReply(safeContent);
       } else {
         await interaction.reply(content);
       }

@@ -93,8 +93,8 @@ class LobbyPhase extends BasePhase {
       sessionId: this.session.id,
     });
 
-    await this._updateMessage();
     await this.reply(interaction, { content: '✅ **انضممت إلى اللعبة!** 🐺', ephemeral: true });
+    await this._updateMessage();
   }
 
   async _handleLeave(interaction) {
@@ -108,8 +108,8 @@ class LobbyPhase extends BasePhase {
 
     this.players.splice(idx, 1);
     this.session.eventBus.emit('player.left', { userId: interaction.user.id, playerCount: this.players.length });
-    await this._updateMessage();
     await this.reply(interaction, { content: '✅ **غادرت اللعبة.**', ephemeral: true });
+    await this._updateMessage();
   }
 
   async _handleStart(interaction) {
@@ -135,8 +135,7 @@ class LobbyPhase extends BasePhase {
     if (!this.session.fsm?.is('lobby')) {
       return this.reply(interaction, { content: '❌ انتهت صلاحية هذا التفاعل.', ephemeral: true });
     }
-    const explanation = LobbyPanel.buildExplanation();
-    await interaction.reply(explanation);
+    await this.reply(interaction, LobbyPanel.buildExplanation());
   }
 
   // ─── Internal ────────────────────────────────

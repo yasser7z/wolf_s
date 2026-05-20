@@ -81,7 +81,8 @@ class RouteRegistry {
   static async _safeReply(interaction, content) {
     try {
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(content);
+        const { ephemeral, ...safeContent } = content;
+        await interaction.editReply(safeContent);
       } else {
         await interaction.reply(content);
       }
@@ -93,6 +94,13 @@ class RouteRegistry {
    */
   static _wrap(sessionManager, handler) {
     return async (interaction) => {
+      // Safety defer: auto-acknowledge after 2s to prevent Discord 3s timeout
+      const safeDefer = setTimeout(async () => {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
+      }, 2000);
+
       try {
         if (!sessionManager) {
           await RouteRegistry._safeReply(interaction, { content: '❌ مدير الجلسات غير متاح.', ephemeral: true });
@@ -131,6 +139,8 @@ class RouteRegistry {
       } catch (err) {
         logger.error(`❌ [Route] ${interaction.customId} (user: ${interaction.user?.id}):`, err.stack || err.message);
         await RouteRegistry._safeReply(interaction, { content: '❌ حدث خطأ.', ephemeral: true });
+      } finally {
+        clearTimeout(safeDefer);
       }
     };
   }
