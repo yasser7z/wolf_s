@@ -1,0 +1,21 @@
+{
+  "name": "vale-community-bot",
+  "version": "1.0.0",
+  "description": "Vale Community - لعبة اجتماعية خصم للـ Discord مستوحاة من Wolvesville و Town of Salem",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "register": "node src/scripts/registerSlashCommands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "chalk": "^4.1.2",
+    "moment": "^2.30.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
